@@ -1,3 +1,7 @@
+# Swift build artifacts
+.build/
+.swiftpm/
+
 # Build artifacts
 metal_infer/infer
 metal_infer/chat
@@ -35,3 +39,4 @@ logs/
 metal_infer/test_lzfse
 metal_infer/repack_experts_lz4
 metal_infer/routing_data.bin
+development-guidelines/
