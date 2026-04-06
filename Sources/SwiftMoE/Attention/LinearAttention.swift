@@ -1,5 +1,5 @@
 import Foundation
-import Accelerate
+import Accelerate  // vDSP for BLAS-accelerated state updates
 
 /// CPU-side GatedDeltaNet linear attention with BLAS acceleration.
 ///
@@ -121,33 +121,38 @@ public enum LinearAttention {
                     state.state.withUnsafeMutableBufferPointer { stateBuf in
                         let S = stateBuf.baseAddress! + vh * stateSize
 
-                        // Step 1: Decay state — S *= g
-                        cblas_sscal(Int32(stateSize), gDecay, S, 1)
+                        // Step 1: Decay state — S *= g (vDSP scalar multiply)
+                        var g = gDecay
+                        vDSP_vsmul(S, 1, &g, S, 1, vDSP_Length(stateSize))
 
-                        // Step 2: Predict — kvMem = S @ k (matrix-vector product)
+                        // Step 2: Predict — kvMem = S @ k (row-major matvec)
+                        // kvMem[vi] = sum_ki(S[vi,ki] * k[ki])
                         var kvMem = [Float](repeating: 0, count: valueDim)
-                        cblas_sgemv(CblasRowMajor, CblasNoTrans,
-                                    Int32(valueDim), Int32(keyDim),
-                                    1.0, S, Int32(keyDim),
-                                    kH, 1,
-                                    0.0, &kvMem, 1)
+                        for vi in 0..<valueDim {
+                            var dot: Float = 0
+                            vDSP_dotpr(S + vi * keyDim, 1, kH, 1, &dot, vDSP_Length(keyDim))
+                            kvMem[vi] = dot
+                        }
 
                         // Step 3: Delta = (v - kvMem) * beta, then rank-1 update S += delta @ k^T
                         var delta = [Float](repeating: 0, count: valueDim)
                         for d in 0..<valueDim {
                             delta[d] = (vH[d] - kvMem[d]) * bGate
                         }
-                        cblas_sger(CblasRowMajor, Int32(valueDim), Int32(keyDim),
-                                   1.0, &delta, 1, kH, 1, S, Int32(keyDim))
+                        // S[vi,ki] += delta[vi] * k[ki]
+                        for vi in 0..<valueDim {
+                            var d = delta[vi]
+                            vDSP_vsma(kH, 1, &d, S + vi * keyDim, 1, S + vi * keyDim, 1, vDSP_Length(keyDim))
+                        }
 
-                        // Step 4: Output = S @ q (matrix-vector product)
+                        // Step 4: Output = S @ q (row-major matvec)
                         let qH = normQ.withUnsafeBufferPointer { $0.baseAddress! + kh * keyDim }
                         let oH = outBuf.baseAddress! + vh * valueDim
-                        cblas_sgemv(CblasRowMajor, CblasNoTrans,
-                                    Int32(valueDim), Int32(keyDim),
-                                    1.0, S, Int32(keyDim),
-                                    qH, 1,
-                                    0.0, oH, 1)
+                        for vi in 0..<valueDim {
+                            var dot: Float = 0
+                            vDSP_dotpr(S + vi * keyDim, 1, qH, 1, &dot, vDSP_Length(keyDim))
+                            oH[vi] = dot
+                        }
                     }
                 }
             }
@@ -205,12 +210,10 @@ public enum LinearAttention {
         }
 
         // Update conv state: shift left, append new input
-        let historySize = (kernelSize - 1) * channels
+        let historyLen = (kernelSize - 1) * channels
         if kernelSize > 2 {
-            // Shift earlier states left by one position
-            convState.withUnsafeMutableBufferPointer { buf in
-                memmove(buf.baseAddress!, buf.baseAddress! + channels,
-                        (historySize - channels) * MemoryLayout<Float>.size)
+            for i in 0..<(historyLen - channels) {
+                convState[i] = convState[i + channels]
             }
         }
         // Write new input into the last history position
