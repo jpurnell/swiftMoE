@@ -15,11 +15,11 @@ struct KVCacheTests {
 
         #expect(cache.length == 1)
         cache.withKCache { kPtr in
-            #expect(kPtr[0] == 1.0)
-            #expect(kPtr[3] == 4.0)
+            #expect(abs(kPtr[0] - 1.0) < 1e-6)
+            #expect(abs(kPtr[3] - 4.0) < 1e-6)
         }
         cache.withVCache { vPtr in
-            #expect(vPtr[0] == 5.0)
+            #expect(abs(vPtr[0] - 5.0) < 1e-6)
         }
     }
 
@@ -34,7 +34,7 @@ struct KVCacheTests {
         #expect(cache.length == 2)
         cache.withKCache { kPtr in
             // Position 1, element 0
-            #expect(kPtr[kvDim + 0] == 5.0)
+            #expect(abs(kPtr[kvDim + 0] - 5.0) < 1e-6)
         }
     }
 

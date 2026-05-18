@@ -11,7 +11,9 @@ public struct IOReadStats: Sendable {
     /// Bytes read per second across all reads.
     public var throughputBytesPerSec: Double {
         guard totalMs > 0 else { return 0 }
-        return Double(totalBytes) / (totalMs / 1000.0)
+        let seconds = totalMs / 1000.0
+        guard seconds > 0 else { return 0 }
+        return Double(totalBytes) / seconds
     }
 
     /// Total bytes read across all experts.
@@ -61,8 +63,7 @@ public struct IOPool: Sendable {
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             for (i, expertIdx) in expertIndices.enumerated() {
-                // Each task writes to a unique, non-overlapping buffer.
-                // The compiler can't prove this, so we opt out of the Sendable check.
+                // Justification: each task writes to a unique, non-overlapping pre-allocated buffer; no concurrent access.
                 nonisolated(unsafe) let dst = destinations[i]
                 group.addTask {
                     let offset = off_t(expertIdx) * off_t(expertSize)

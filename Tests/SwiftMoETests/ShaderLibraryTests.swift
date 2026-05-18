@@ -43,13 +43,13 @@ struct ShaderLibraryTests {
 
         let library = try ShaderLibrary(device: device, shaderPath: path)
 
-        // Required pipelines — must be non-nil
-        #expect(library.matvecV3 != nil, "matvec_v3 pipeline required")
-        #expect(library.matvecFast != nil, "matvec_fast pipeline required")
-        #expect(library.rmsNormSum != nil, "rms_norm_sum pipeline required")
-        #expect(library.rmsNormApply != nil, "rms_norm_apply pipeline required")
-        #expect(library.swiglu != nil, "swiglu pipeline required")
-        #expect(library.moeCombineResidual != nil, "moe_combine_residual pipeline required")
+        // Required pipelines — verify they compiled with correct thread config
+        #expect(library.matvecV3.maxTotalThreadsPerThreadgroup > 0)
+        #expect(library.matvecFast.maxTotalThreadsPerThreadgroup > 0)
+        #expect(library.rmsNormSum.maxTotalThreadsPerThreadgroup > 0)
+        #expect(library.rmsNormApply.maxTotalThreadsPerThreadgroup > 0)
+        #expect(library.swiglu.maxTotalThreadsPerThreadgroup > 0)
+        #expect(library.moeCombineResidual.maxTotalThreadsPerThreadgroup > 0)
     }
 
     @Test("Compiles optional delta-net pipelines")
@@ -64,8 +64,10 @@ struct ShaderLibraryTests {
         let library = try ShaderLibrary(device: device, shaderPath: path)
 
         // Optional but expected on M-series hardware
-        #expect(library.deltaNetStep != nil, "delta_net_step should compile on Apple Silicon")
-        #expect(library.conv1dStep != nil, "conv1d_step should compile on Apple Silicon")
+        let deltaNet = try #require(library.deltaNetStep, "delta_net_step should compile on Apple Silicon")
+        #expect(deltaNet.maxTotalThreadsPerThreadgroup > 0)
+        let conv1d = try #require(library.conv1dStep, "conv1d_step should compile on Apple Silicon")
+        #expect(conv1d.maxTotalThreadsPerThreadgroup > 0)
     }
 
     @Test("Throws for nonexistent shader path")

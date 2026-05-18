@@ -48,12 +48,22 @@ public struct KVCache {
 
     /// Provides read access to the K cache.
     public func withKCache<T>(_ body: (UnsafePointer<Float>) -> T) -> T {
-        kCache.withUnsafeBufferPointer { body($0.baseAddress!) }
+        kCache.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else {
+                preconditionFailure("KVCache K buffer is empty")
+            }
+            return body(base)
+        }
     }
 
     /// Provides read access to the V cache.
     public func withVCache<T>(_ body: (UnsafePointer<Float>) -> T) -> T {
-        vCache.withUnsafeBufferPointer { body($0.baseAddress!) }
+        vCache.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else {
+                preconditionFailure("KVCache V buffer is empty")
+            }
+            return body(base)
+        }
     }
 
     /// Resets the cache to empty (for new generation).

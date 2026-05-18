@@ -30,6 +30,7 @@ public enum Softmax {
         }
 
         // Normalize
+        guard sum > 0 else { return }
         let invSum = 1.0 / sum
         for i in 0..<count {
             values[i] *= invSum

@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.swiftmoe", category: "manifest")
 
 /// Parses `model_weights.json` to locate tensors within `model_weights.bin`.
 ///
@@ -29,11 +32,30 @@ public struct WeightManifest: Sendable {
 
     /// Loads and parses the JSON manifest.
     ///
-    /// - Parameter path: Path to `model_weights.json`.
-    /// - Throws: ``FlashMoEError/fileNotFound(path:)`` or ``FlashMoEError/manifestParseFailed(reason:)``.
-    public init(path: String) throws {
-        guard let data = FileManager.default.contents(atPath: path) else {
-            throw FlashMoEError.fileNotFound(path: path)
+    /// - Parameters:
+    ///   - path: Path to `model_weights.json`.
+    ///   - allowedRoot: Root directory the resolved path must stay within. Defaults to the
+    ///     parent directory of `path`.
+    /// - Throws: ``FlashMoEError/fileNotFound(path:)``, ``FlashMoEError/pathTraversal(path:allowedRoot:)``,
+    ///   or ``FlashMoEError/manifestParseFailed(reason:)``.
+    public init(path: String, allowedRoot: String? = nil) throws {
+        // Resolve and validate the path to prevent CWE-22 path traversal.
+        let resolvedURL = URL(fileURLWithPath: path).standardized
+        let rootURL: URL
+        if let allowedRoot {
+            rootURL = URL(fileURLWithPath: allowedRoot).standardized
+        } else {
+            rootURL = resolvedURL.deletingLastPathComponent()
+        }
+        guard resolvedURL.path.hasPrefix(rootURL.path) else {
+            throw FlashMoEError.pathTraversal(path: resolvedURL.path, allowedRoot: rootURL.path)
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: resolvedURL)
+        } catch {
+            throw FlashMoEError.fileNotFound(path: resolvedURL.path)
         }
 
         let json: Any
@@ -56,6 +78,8 @@ public struct WeightManifest: Sendable {
                   let size = (info["size"] as? NSNumber)?.intValue,
                   let shapeArray = info["shape"] as? [NSNumber],
                   let dtype = info["dtype"] as? String else {
+                // silent: malformed tensor entries are skipped; the caller validates required tensors via subscript
+                logger.debug("Skipping malformed tensor entry: \(name, privacy: .public)")
                 continue
             }
 
@@ -70,6 +94,7 @@ public struct WeightManifest: Sendable {
         }
 
         self.tensors = result
+        logger.debug("Loaded manifest with \(result.count, privacy: .public) tensors from \(resolvedURL.path, privacy: .public)")
     }
 
     /// O(1) tensor lookup by name.

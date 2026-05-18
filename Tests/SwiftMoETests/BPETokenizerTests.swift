@@ -117,10 +117,8 @@ struct BPETokenizerTests {
         let tok = try BPETokenizer(path: path)
         let ids = tok.encode("hello")
 
-        // BPE should merge: h→e→l→l→o → he→ll→o → hel→lo → hello
-        // Final token should be "hello" = ID 9
-        #expect(ids.contains(9) || ids.count > 0,
-                "Should produce at least one token for 'hello'")
+        #expect(!ids.isEmpty,
+                "BPE should produce at least one token for 'hello'")
     }
 
     @Test("Recognizes added tokens")

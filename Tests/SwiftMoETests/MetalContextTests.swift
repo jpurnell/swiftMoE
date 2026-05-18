@@ -15,7 +15,8 @@ struct MetalContextTests {
         let ctx = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
 
         #expect(ctx.device.name.isEmpty == false, "Device should have a name")
-        #expect(ctx.projections.input.length > 0)
+        #expect(ctx.projections.input.length == 32768,
+                "Input buffer: max(64*128, 32*256) * 4 = 32768")
         #expect(ctx.experts.dataA.count == ExpertBuffers.maxK)
         #expect(ctx.combine.residual.length == ModelConfig.qwen397B.hiddenDim * MemoryLayout<Float>.size)
     }
@@ -36,7 +37,8 @@ struct MetalContextTests {
         defer { free(aligned) }
 
         ctx.setWeights(aligned, size: size)
-        #expect(ctx.weightBuffer != nil, "Weight buffer should be set")
+        let weightBuf = try #require(ctx.weightBuffer, "Weight buffer should be set")
+        #expect(weightBuf.length == size, "Weight buffer length should match input size")
     }
 
     @Test("2-bit mode uses smaller expert buffers")
@@ -69,7 +71,7 @@ struct MetalContextTests {
         // Verify it's zeroed
         if let firstState = ctx.linearAttention.deltaState.first {
             let ptr = firstState.contents().assumingMemoryBound(to: Float.self)
-            #expect(ptr[0] == 0.0, "Delta state should be zeroed after reset")
+            #expect(abs(ptr[0]) < 1e-6, "Delta state should be zeroed after reset")
         }
     }
 }

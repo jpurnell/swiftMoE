@@ -17,6 +17,7 @@ public enum Embedding {
     /// - Parameters:
     ///   - weightFile: The mmap'd weight file.
     ///   - tokenID: Token index (0..<248320).
+    ///   - config: Model configuration providing dimensions and group size.
     ///   - output: Destination buffer [HIDDEN_DIM floats].
     public static func lookup(
         weightFile: WeightFile,
@@ -68,6 +69,7 @@ public enum Embedding {
     /// - Parameters:
     ///   - weightFile: The mmap'd weight file.
     ///   - hidden: Input hidden state [HIDDEN_DIM floats].
+    ///   - config: Model configuration providing vocab size, hidden dim, and group size.
     ///   - logits: Output logits [VOCAB_SIZE floats].
     public static func lmHead(
         weightFile: WeightFile,

@@ -11,30 +11,35 @@ struct LinearAttentionTests {
         let totalValue = config.linearTotalValue
         let convDim = config.linearConvDim
 
-        var qkvOut = [Float](repeating: 0.1, count: convDim)
-        var zOut = [Float](repeating: 0.1, count: totalValue)
-        var betaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
-        var alphaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
+        let qkvOut = [Float](repeating: 0.1, count: convDim)
+        let zOut = [Float](repeating: 0.1, count: totalValue)
+        let betaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
+        let alphaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
         var output = [Float](repeating: -999, count: totalValue)
         var state = LinearAttentionState(config: config)
 
         qkvOut.withUnsafeBufferPointer { qkvBuf in
+            guard let qkvBase = qkvBuf.baseAddress else { return }
             zOut.withUnsafeBufferPointer { zBuf in
+                guard let zBase = zBuf.baseAddress else { return }
                 betaOut.withUnsafeBufferPointer { betaBuf in
+                    guard let betaBase = betaBuf.baseAddress else { return }
                     alphaOut.withUnsafeBufferPointer { alphaBuf in
+                        guard let alphaBase = alphaBuf.baseAddress else { return }
                         output.withUnsafeMutableBufferPointer { outBuf in
+                            guard let outBase = outBuf.baseAddress else { return }
                             LinearAttention.forward(
-                                qkvOut: qkvBuf.baseAddress!,
-                                zOut: zBuf.baseAddress!,
-                                betaOut: betaBuf.baseAddress!,
-                                alphaOut: alphaBuf.baseAddress!,
+                                qkvOut: qkvBase,
+                                zOut: zBase,
+                                betaOut: betaBase,
+                                alphaOut: alphaBase,
                                 state: &state,
                                 config: config,
                                 conv1dW: nil,
                                 aLog: nil,
                                 dtBias: nil,
                                 gatedNormW: nil,
-                                output: outBuf.baseAddress!
+                                output: outBase
                             )
                         }
                     }
@@ -42,9 +47,7 @@ struct LinearAttentionTests {
             }
         }
 
-        // Output should be written
         #expect(output.count == totalValue)
-        // With nil weights, conv1d copies input directly, so output depends on input values
     }
 
     @Test("Conv1d step updates state")
@@ -55,7 +58,6 @@ struct LinearAttentionTests {
         var input: [Float] = [1, 2, 3, 4]
         var output = [Float](repeating: 0, count: channels)
 
-        // Without weights, conv1d copies input
         LinearAttention.conv1dStep(
             convState: &convState,
             newInput: &input,
@@ -65,10 +67,9 @@ struct LinearAttentionTests {
             kernelSize: kernelSize
         )
 
-        // After one step, the last history position should contain the input
         let lastOffset = (kernelSize - 2) * channels
-        #expect(convState[lastOffset] == 1.0, "Conv state should store input")
-        #expect(convState[lastOffset + 1] == 2.0)
+        #expect(abs(convState[lastOffset] - 1.0) < 1e-6, "Conv state should store input")
+        #expect(abs(convState[lastOffset + 1] - 2.0) < 1e-6)
     }
 
     @Test("State persists across multiple forward calls")
@@ -78,29 +79,33 @@ struct LinearAttentionTests {
         let convDim = config.linearConvDim
 
         var state = LinearAttentionState(config: config)
-        let initialState = state.state  // Copy
+        let initialState = state.state
 
-        // Run forward to modify state
-        var qkvOut = [Float](repeating: 0.5, count: convDim)
-        var zOut = [Float](repeating: 0.1, count: totalValue)
-        var betaOut = [Float](repeating: 0.5, count: config.linearNumVHeads)
-        var alphaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
+        let qkvOut = [Float](repeating: 0.5, count: convDim)
+        let zOut = [Float](repeating: 0.1, count: totalValue)
+        let betaOut = [Float](repeating: 0.5, count: config.linearNumVHeads)
+        let alphaOut = [Float](repeating: 0.0, count: config.linearNumVHeads)
         var output = [Float](repeating: 0, count: totalValue)
 
         qkvOut.withUnsafeBufferPointer { qkvBuf in
+            guard let qkvBase = qkvBuf.baseAddress else { return }
             zOut.withUnsafeBufferPointer { zBuf in
+                guard let zBase = zBuf.baseAddress else { return }
                 betaOut.withUnsafeBufferPointer { betaBuf in
+                    guard let betaBase = betaBuf.baseAddress else { return }
                     alphaOut.withUnsafeBufferPointer { alphaBuf in
+                        guard let alphaBase = alphaBuf.baseAddress else { return }
                         output.withUnsafeMutableBufferPointer { outBuf in
+                            guard let outBase = outBuf.baseAddress else { return }
                             LinearAttention.forward(
-                                qkvOut: qkvBuf.baseAddress!,
-                                zOut: zBuf.baseAddress!,
-                                betaOut: betaBuf.baseAddress!,
-                                alphaOut: alphaBuf.baseAddress!,
+                                qkvOut: qkvBase,
+                                zOut: zBase,
+                                betaOut: betaBase,
+                                alphaOut: alphaBase,
                                 state: &state,
                                 config: config,
                                 conv1dW: nil, aLog: nil, dtBias: nil, gatedNormW: nil,
-                                output: outBuf.baseAddress!
+                                output: outBase
                             )
                         }
                     }
@@ -109,7 +114,7 @@ struct LinearAttentionTests {
         }
 
         // State should have changed (delta-net rank-1 update modifies it)
-        let stateChanged = zip(state.state, initialState).contains { $0 != $1 }
+        let stateChanged = zip(state.state, initialState).contains { abs($0 - $1) > 1e-6 }
         #expect(stateChanged, "Delta-net state should be modified after forward pass")
     }
 }

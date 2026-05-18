@@ -19,4 +19,10 @@ public enum FlashMoEError: Error, Sendable {
 
     /// Metal shader source failed to compile.
     case shaderCompilationFailed(reason: String)
+
+    /// A feature is not yet implemented.
+    case notImplemented(feature: String)
+
+    /// A resolved path escapes its allowed directory.
+    case pathTraversal(path: String, allowedRoot: String)
 }

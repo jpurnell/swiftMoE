@@ -17,6 +17,7 @@ import Metal
 /// This 64MB difference matters on constrained systems because Metal shared
 /// memory competes with the OS page cache for DRAM (see "Trust the OS", Section 5.3).
 public struct ExpertBuffers {
+    /// Maximum number of expert slots (double-buffered).
     public static let maxK = 8
 
     /// Set A: GPU reads from these during CMD3.
@@ -49,6 +50,7 @@ public struct ExpertBuffers {
     ///
     /// - Parameters:
     ///   - device: Metal device for buffer creation.
+    ///   - config: Model configuration providing expert sizes and alignment.
     ///   - use2Bit: If true, sizes data buffers for 2-bit experts (saves ~64MB).
     public init(device: MTLDevice, config: ModelConfig, use2Bit: Bool) throws {
         let expertSize = use2Bit ? config.expertSize2Bit : config.expertSize4Bit

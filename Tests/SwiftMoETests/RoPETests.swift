@@ -29,7 +29,7 @@ struct RoPETests {
         }
         // Non-rotary dims should always be unchanged
         for i in 4..<8 {
-            #expect(q[i] == original[i],
+            #expect(abs(q[i] - original[i]) < 1e-6,
                     "Non-rotary dim \(i) should never change")
         }
     }

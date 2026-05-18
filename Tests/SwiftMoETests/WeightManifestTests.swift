@@ -53,13 +53,12 @@ struct WeightManifestTests {
         defer { unlink(path) }
 
         let manifest = try WeightManifest(path: path)
-        let tensor = manifest["model.embed_tokens.weight"]
+        let tensor = try #require(manifest["model.embed_tokens.weight"])
 
-        #expect(tensor != nil)
-        #expect(tensor?.offset == 0)
-        #expect(tensor?.size == 4_071_628_800)
-        #expect(tensor?.shape == [248320, 4096])
-        #expect(tensor?.dtype == "BF16")
+        #expect(tensor.offset == 0)
+        #expect(tensor.size == 4_071_628_800)
+        #expect(tensor.shape == [248320, 4096])
+        #expect(tensor.dtype == "BF16")
     }
 
     @Test("Returns nil for nonexistent tensor name")

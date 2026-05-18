@@ -29,7 +29,7 @@ struct SoftmaxTests {
         var values: [Float] = [0.0, 0.0, 100.0, 0.0]
         Softmax.apply(&values, count: 4)
 
-        #expect(values[2] > 0.99)
+        #expect(abs(values[2] - 1.0) < 1e-6, "softmax([0,0,100,0]) dominant element should be ~1.0")
         #expect(values[0] < 0.01)
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftMoE
 
 // ============================================================================
@@ -11,6 +12,8 @@ import SwiftMoE
 // API:
 //   POST /v1/chat/completions  (OpenAI chat format, SSE response)
 // ============================================================================
+
+private let logger = Logger(subsystem: "com.swiftmoe.server", category: "main")
 
 struct ServerConfig {
     var modelPath: String?
@@ -54,7 +57,7 @@ func main() throws {
     if serverConfig.demo {
         // ---- Demo mode: synthetic tiny model ----
         modelConfig = .tiny
-        print("[demo] Using ModelConfig.tiny (hidden=\(modelConfig.hiddenDim), \(modelConfig.numLayers) layers, \(modelConfig.numExperts) experts)")
+        logger.info("[demo] Using ModelConfig.tiny (hidden=\(modelConfig.hiddenDim, privacy: .public), \(modelConfig.numLayers, privacy: .public) layers, \(modelConfig.numExperts, privacy: .public) experts)")
 
         // Generate synthetic fixtures
         let tempBase = FileManager.default.temporaryDirectory
@@ -142,15 +145,19 @@ func main() throws {
             let path = tempBase.appendingPathComponent("layer_\(i).bin").path
             let fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0o644)
             let zeros = Data(repeating: 0, count: modelConfig.numExperts * modelConfig.expertSize4Bit)
-            zeros.withUnsafeBytes { ptr in _ = Darwin.write(fd, ptr.baseAddress!, zeros.count) }
+            let writeResult = zeros.withUnsafeBytes { ptr in
+                guard let base = ptr.baseAddress else { return -1 }
+                return Darwin.write(fd, base, zeros.count)
+            }
+            _ = writeResult
             _ = lseek(fd, 0, SEEK_SET)
             fds.append(fd)
         }
         expertFDs = fds
 
-        print("[demo] Synthetic model created (\(binaryData.count) bytes)")
+        logger.info("[demo] Synthetic model created (\(binaryData.count, privacy: .public) bytes)")
     } else {
-        fatalError("--model mode not yet implemented. Use --demo for testing.")
+        throw FlashMoEError.notImplemented(feature: "--model mode not yet implemented. Use --demo for testing.")
     }
 
     // ---- Initialize Metal context ----
@@ -164,12 +171,12 @@ func main() throws {
         generator.pipeline.timingEnabled = true
     }
 
-    print("[server] Metal context ready: \(ctx.device.name)")
-    print("[server] Config: \(modelConfig.numLayers) layers, \(modelConfig.numExperts) experts, K=\(serverConfig.activeExperts)")
+    logger.info("[server] Metal context ready: \(ctx.device.name, privacy: .public)")
+    logger.info("[server] Config: \(modelConfig.numLayers, privacy: .public) layers, \(modelConfig.numExperts, privacy: .public) experts, K=\(serverConfig.activeExperts, privacy: .public)")
 
     // ---- Start HTTP server ----
     let server = HTTPServer(port: serverConfig.port) { prompt, maxTokens, writer in
-        print("[request] prompt=\(prompt.prefix(80))... maxTokens=\(maxTokens)")
+        logger.info("[request] prompt=\(prompt.prefix(80), privacy: .private)... maxTokens=\(maxTokens, privacy: .public)")
 
         writer.sendHeaders()
 
@@ -192,14 +199,24 @@ func main() throws {
 
         writer.sendFinish()
         writer.sendDone()
-        print("[request] done")
+        logger.info("[request] done")
     }
 
     try server.start()
 
     // Cleanup (unreachable in normal operation)
     if let dir = tempDir {
-        try? FileManager.default.removeItem(atPath: dir)
+        let tempDirURL = URL(fileURLWithPath: dir).standardized
+        let tempRoot = FileManager.default.temporaryDirectory.standardized
+        guard tempDirURL.path.hasPrefix(tempRoot.path) else {
+            logger.error("Temp directory path escapes allowed root: \(dir, privacy: .private)")
+            return
+        }
+        do {
+            try FileManager.default.removeItem(at: tempDirURL)
+        } catch {
+            logger.error("Failed to clean up temp directory: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
 

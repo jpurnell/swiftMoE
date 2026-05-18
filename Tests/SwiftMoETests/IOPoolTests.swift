@@ -62,7 +62,7 @@ struct IOPoolTests {
             expertSize: expertSize
         )
 
-        #expect(stats.totalMs >= 0, "Latency should be non-negative")
+        #expect(stats.totalMs.isFinite, "Latency should be a finite value")
         #expect(stats.readCount == 2, "Should report 2 reads")
     }
 

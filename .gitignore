@@ -28,6 +28,12 @@ __pycache__/
 # macOS
 .DS_Store
 
+# Claude Code local config
+.claude/
+
+# Editor backups
+Package.swift.backup-*
+
 # Profiling / experiment artifacts
 *.gputrace/
 *.trace/

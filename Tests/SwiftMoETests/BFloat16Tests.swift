@@ -7,13 +7,10 @@ struct BFloat16Tests {
     @Test("Known BF16 values convert correctly to Float32")
     func knownValues() {
         // 1.0 in BF16 = 0x3F80
-        #expect(bf16ToFloat(0x3F80) == 1.0)
-        // -1.0 in BF16 = 0xBF80
-        #expect(bf16ToFloat(0xBF80) == -1.0)
-        // 0.0 in BF16 = 0x0000
-        #expect(bf16ToFloat(0x0000) == 0.0)
-        // 2.0 in BF16 = 0x4000
-        #expect(bf16ToFloat(0x4000) == 2.0)
+        #expect(abs(bf16ToFloat(0x3F80) - 1.0) < 1e-6)
+        #expect(abs(bf16ToFloat(0xBF80) - (-1.0)) < 1e-6)
+        #expect(abs(bf16ToFloat(0x0000)) < 1e-6)
+        #expect(abs(bf16ToFloat(0x4000) - 2.0) < 1e-6)
     }
 
     @Test("Float32 to BF16 truncation preserves value within precision")

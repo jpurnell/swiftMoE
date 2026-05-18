@@ -156,13 +156,15 @@ enum SyntheticFixtures {
         var expertPaths: [String] = []
         let expertSize = config.expertSize4Bit
         for i in 0..<numLayers {
-            let path = tempDir.appendingPathComponent("layer_\(String(format: "%02d", i)).bin").path
+            let layerNum = i < 10 ? "0\(i)" : "\(i)"
+            let path = tempDir.appendingPathComponent("layer_\(layerNum).bin").path
             let fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
             guard fd >= 0 else { continue }
             // Write enough experts (numExperts × expertSize bytes)
             let zeros = Data(repeating: 0, count: numExperts * expertSize)
             zeros.withUnsafeBytes { ptr in
-                _ = Darwin.write(fd, ptr.baseAddress!, zeros.count)
+                guard let base = ptr.baseAddress else { return }
+                _ = Darwin.write(fd, base, zeros.count)
             }
             close(fd)
             expertPaths.append(path)
@@ -178,6 +180,6 @@ enum SyntheticFixtures {
 
     /// Removes all synthetic fixture files.
     static func cleanup(_ paths: FixturePaths) {
-        try? FileManager.default.removeItem(atPath: paths.tempDir)
+        try? FileManager.default.removeItem(atPath: paths.tempDir) // silent: best-effort test cleanup
     }
 }

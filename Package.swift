@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 
 import PackageDescription
 
@@ -11,6 +11,9 @@ let package = Package(
         .library(name: "SwiftMoE", targets: ["SwiftMoE"]),
         .executable(name: "swift-moe-server", targets: ["SwiftMoEServer"]),
         .executable(name: "swift-moe-chat", targets: ["SwiftMoEChat"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.3"),
     ],
     targets: [
         // MARK: - C Interop Targets

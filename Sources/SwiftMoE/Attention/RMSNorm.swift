@@ -23,12 +23,13 @@ public enum RMSNorm {
         dim: Int,
         eps: Float = 1e-6
     ) {
+        guard dim > 0 else { return }
         var sumSq: Float = 0
         for i in 0..<dim {
             sumSq += input[i] * input[i]
         }
         let rms = sqrtf(sumSq / Float(dim) + eps)
-        let invRms = 1.0 / rms
+        let invRms = rms > 0 ? 1.0 / rms : 0.0
 
         for i in 0..<dim {
             output[i] = input[i] * invRms * bf16ToFloat(weights[i])
@@ -47,12 +48,13 @@ public enum RMSNorm {
         dim: Int,
         eps: Float = 1e-6
     ) {
+        guard dim > 0 else { return }
         var sumSq: Float = 0
         for i in 0..<dim {
             sumSq += input[i] * input[i]
         }
         let rms = sqrtf(sumSq / Float(dim) + eps)
-        let invRms = 1.0 / rms
+        let invRms = rms > 0 ? 1.0 / rms : 0.0
 
         for i in 0..<dim {
             output[i] = input[i] * invRms
@@ -73,12 +75,13 @@ public enum RMSNorm {
         dim: Int,
         eps: Float = 1e-6
     ) {
+        guard dim > 0 else { return }
         var sumSq: Float = 0
         for i in 0..<dim {
             sumSq += input[i] * input[i]
         }
         let rms = sqrtf(sumSq / Float(dim) + eps)
-        let invRms = 1.0 / rms
+        let invRms = rms > 0 ? 1.0 / rms : 0.0
 
         for i in 0..<dim {
             let normalized = input[i] * invRms

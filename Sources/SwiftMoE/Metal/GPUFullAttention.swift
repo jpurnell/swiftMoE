@@ -77,13 +77,15 @@ public enum GPUFullAttention {
         let numHeads = config.numAttentionHeads
         let headDim = config.headDim
         let kvDim = config.kvDim
+        guard config.numKVHeads > 0 else { return }
         let headsPerKV = numHeads / config.numKVHeads
 
         var hd = UInt32(headDim)
         var kvd = UInt32(kvDim)
         var sl = UInt32(seqLen)
         var seqStride = UInt32(AttentionBuffers.gpuKVSeqLength)
-        var scale = 1.0 / sqrtf(Float(headDim))
+        let sqrtHD = sqrtf(Float(headDim))
+        var scale = sqrtHD > 0 ? 1.0 / sqrtHD : 0.0
         var hpkv = UInt32(headsPerKV)
 
         // ---- Enc A1: attn_scores_batched ----

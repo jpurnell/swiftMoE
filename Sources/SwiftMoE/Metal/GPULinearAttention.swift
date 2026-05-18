@@ -92,7 +92,8 @@ public enum GPULinearAttention {
         // ---- Enc L2: rms_norm_qk ----
         if let enc = commandBuffer.makeComputeCommandEncoder() {
             var kd = UInt32(keyDim)
-            var invScale = 1.0 / sqrtf(Float(keyDim))
+            let sqrtKD = sqrtf(Float(keyDim))
+            var invScale = sqrtKD > 0 ? 1.0 / sqrtKD : 0.0
             enc.setComputePipelineState(normQKPipe)
             enc.setBuffer(context.linearAttention.convOutput, offset: 0, index: 0)
             enc.setBuffer(context.linearAttention.convOutput,
@@ -124,7 +125,7 @@ public enum GPULinearAttention {
 
         // ---- Enc L4: gated_delta_net_step ----
         if let enc = commandBuffer.makeComputeCommandEncoder() {
-            var khpv = UInt32(numVHeads / numKHeads)
+            var khpv = UInt32(numKHeads > 0 ? numVHeads / numKHeads : 0)
             enc.setComputePipelineState(deltaNetPipe)
             enc.setBuffer(context.linearAttention.deltaState[linearLayerIndex], offset: 0, index: 0)
             enc.setBuffer(context.linearAttention.convOutput, offset: 0, index: 1)  // q

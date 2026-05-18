@@ -23,6 +23,7 @@ public struct BatchMatvecSpec {
     /// Index into `MetalContext.projections.batchSlots` for GPU output.
     public let batchSlot: Int
 
+    /// Creates a new BatchMatvecSpec with the given weight pointers and dimensions.
     public init(
         weights: UnsafeRawPointer,
         scales: UnsafeRawPointer,

@@ -43,6 +43,7 @@ public final class TokenGenerator {
     ///
     /// - Parameters:
     ///   - context: Initialized Metal context with compiled shaders.
+    ///   - config: Model configuration providing dimensions and layer layout.
     ///   - activeExperts: Number of experts per token (default 4).
     ///   - maxSeqLen: Maximum sequence length for KV caches.
     public init(context: MetalContext, config: ModelConfig, activeExperts: Int = 4, maxSeqLen: Int = 8192) {
@@ -106,14 +107,15 @@ public final class TokenGenerator {
     ///   - promptTokens: Tokenized prompt (array of token IDs).
     ///   - maxTokens: Maximum number of tokens to generate.
     ///   - weightFile: The mmap'd non-expert weight file.
-    ///   - expertFiles: Per-layer expert weight files (60 files).
+    ///   - expertFDs: Per-layer expert file descriptors (60 FDs).
     ///   - layerWeights: Pre-computed weight pointers for all 60 layers.
+    ///   - use2Bit: Whether experts use 2-bit quantization (default `false`).
     ///   - onToken: Callback invoked for each generated token. Return `false` to stop.
     public func generate(
         promptTokens: [Int],
         maxTokens: Int,
         weightFile: WeightFile,
-        expertFDs: [Int32],  // per-layer file descriptors for packed expert files
+        expertFDs: [Int32],
         layerWeights: [LayerWeightPointers],
         use2Bit: Bool = false,
         onToken: (Int) -> Bool
@@ -123,48 +125,26 @@ public final class TokenGenerator {
         var normed = [Float](repeating: 0, count: hiddenDim)
         var pos = 0
 
-        // Get final norm weights
         let finalNormW = weightFile.tensorPointer(
             name: "model.norm.weight", as: UInt16.self)
 
-        // Wrap mmap'd weights as Metal buffer for GPU access
         context.setWeights(weightFile.data, size: weightFile.size)
 
         // ---- Prefill: process all prompt tokens ----
         for (i, tokenID) in promptTokens.enumerated() {
             hidden.withUnsafeMutableBufferPointer { hiddenBuf in
-                let hiddenPtr = hiddenBuf.baseAddress!
+                guard let hiddenPtr = hiddenBuf.baseAddress else { return }
 
                 Embedding.lookup(weightFile: weightFile, tokenID: tokenID, config: config, output: hiddenPtr)
 
-                for layer in 0..<config.numLayers {
-                    let isFull = config.isFullAttention(layer: layer)
-                    var kv: KVCache? = isFull ? kvCaches[config.fullAttentionIndex(layer: layer)] : nil
-                    var ls: LinearAttentionState? = isFull ? nil : linearStates[config.linearAttentionIndex(layer: layer)]
+                forwardAllLayers(
+                    hiddenPtr: hiddenPtr,
+                    layerWeights: layerWeights,
+                    expertFDs: expertFDs,
+                    pos: pos,
+                    use2Bit: use2Bit
+                )
 
-                    pipeline.forward(
-                        layerIndex: layer,
-                        hidden: hiddenPtr,
-                        weights: layerWeights[layer],
-                        kvCache: &kv,
-                        linearState: &ls,
-                        position: pos,
-                        K: activeExperts,
-                        expertFD: expertFDs[layer],
-                        use2Bit: use2Bit,
-                        layerWeights: layerWeights
-                    )
-
-                    // Write back mutated state
-                    if isFull, let updatedKV = kv {
-                        kvCaches[config.fullAttentionIndex(layer: layer)] = updatedKV
-                    }
-                    if !isFull, let updatedLS = ls {
-                        linearStates[config.linearAttentionIndex(layer: layer)] = updatedLS
-                    }
-                }
-
-                // For intermediate prefill tokens, discard deferred experts
                 if i < promptTokens.count - 1 {
                     pipeline.discardDeferredExperts()
                 } else {
@@ -177,83 +157,96 @@ public final class TokenGenerator {
         // ---- Generation: produce new tokens ----
         for _ in 0..<maxTokens {
             hidden.withUnsafeMutableBufferPointer { hiddenBuf in
-                let hiddenPtr = hiddenBuf.baseAddress!
+                guard let hiddenPtr = hiddenBuf.baseAddress else { return }
 
-                // 1. Run 60 transformer layers
-                for layer in 0..<config.numLayers {
-                    let isFull = config.isFullAttention(layer: layer)
-                    var kv: KVCache? = isFull ? kvCaches[config.fullAttentionIndex(layer: layer)] : nil
-                    var ls: LinearAttentionState? = isFull ? nil : linearStates[config.linearAttentionIndex(layer: layer)]
+                forwardAllLayers(
+                    hiddenPtr: hiddenPtr,
+                    layerWeights: layerWeights,
+                    expertFDs: expertFDs,
+                    pos: pos,
+                    use2Bit: use2Bit
+                )
 
-                    pipeline.forward(
-                        layerIndex: layer,
-                        hidden: hiddenPtr,
-                        weights: layerWeights[layer],
-                        kvCache: &kv,
-                        linearState: &ls,
-                        position: pos,
-                        K: activeExperts,
-                        expertFD: expertFDs[layer],
-                        use2Bit: use2Bit,
-                        layerWeights: layerWeights
-                    )
-
-                    // Write back mutated state
-                    if isFull, let updatedKV = kv {
-                        kvCaches[config.fullAttentionIndex(layer: layer)] = updatedKV
-                    }
-                    if !isFull, let updatedLS = ls {
-                        linearStates[config.linearAttentionIndex(layer: layer)] = updatedLS
-                    }
-                }
-
-                // 2. Complete deferred experts from layer 59
                 pipeline.completeDeferredExperts(hidden: hiddenPtr)
 
-                // 3. Final RMS norm
                 if let normW = finalNormW {
                     normed.withUnsafeMutableBufferPointer { normedBuf in
+                        guard let normedPtr = normedBuf.baseAddress else { return }
                         RMSNorm.apply(
                             input: hiddenPtr,
                             weights: normW,
-                            output: normedBuf.baseAddress!,
+                            output: normedPtr,
                             dim: hiddenDim
                         )
 
-                        // 4. LM head → logits
                         logits.withUnsafeMutableBufferPointer { logitsBuf in
+                            guard let logitsPtr = logitsBuf.baseAddress else { return }
                             Embedding.lmHead(
                                 weightFile: weightFile,
-                                hidden: normedBuf.baseAddress!,
+                                hidden: normedPtr,
                                 config: config,
-                                logits: logitsBuf.baseAddress!
+                                logits: logitsPtr
                             )
                         }
                     }
                 }
             }
 
-            // 5. Sample (greedy argmax)
             let nextToken = logits.withUnsafeBufferPointer { buf in
-                Embedding.argmax(logits: buf.baseAddress!, vocabSize: config.vocabSize)
+                guard let base = buf.baseAddress else { return 0 }
+                return Embedding.argmax(logits: base, vocabSize: config.vocabSize)
             }
 
-            // 6. Check EOS
             if nextToken == config.eosToken1 || nextToken == config.eosToken2 {
                 break
             }
 
-            // 7. Callback
             if !onToken(nextToken) {
                 break
             }
 
-            // 8. Embed the generated token for the next iteration
             hidden.withUnsafeMutableBufferPointer { hiddenBuf in
+                guard let hiddenPtr = hiddenBuf.baseAddress else { return }
                 Embedding.lookup(weightFile: weightFile, tokenID: nextToken,
-                                config: config, output: hiddenBuf.baseAddress!)
+                                config: config, output: hiddenPtr)
             }
             pos += 1
+        }
+    }
+
+    // MARK: - Private
+
+    private func forwardAllLayers(
+        hiddenPtr: UnsafeMutablePointer<Float>,
+        layerWeights: [LayerWeightPointers],
+        expertFDs: [Int32],
+        pos: Int,
+        use2Bit: Bool
+    ) {
+        for layer in 0..<config.numLayers {
+            let isFull = config.isFullAttention(layer: layer)
+            var kv: KVCache? = isFull ? kvCaches[config.fullAttentionIndex(layer: layer)] : nil
+            var ls: LinearAttentionState? = isFull ? nil : linearStates[config.linearAttentionIndex(layer: layer)]
+
+            pipeline.forward(
+                layerIndex: layer,
+                hidden: hiddenPtr,
+                weights: layerWeights[layer],
+                kvCache: &kv,
+                linearState: &ls,
+                position: pos,
+                K: activeExperts,
+                expertFD: expertFDs[layer],
+                use2Bit: use2Bit,
+                layerWeights: layerWeights
+            )
+
+            if isFull, let updatedKV = kv {
+                kvCaches[config.fullAttentionIndex(layer: layer)] = updatedKV
+            }
+            if !isFull, let updatedLS = ls {
+                linearStates[config.linearAttentionIndex(layer: layer)] = updatedLS
+            }
         }
     }
 }

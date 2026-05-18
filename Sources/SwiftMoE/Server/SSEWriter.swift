@@ -70,8 +70,9 @@ public struct SSEWriter {
         let data = Array(s.utf8)
         var written = 0
         while written < data.count {
-            let n = data.withUnsafeBufferPointer { buf in
-                Darwin.write(fileDescriptor, buf.baseAddress! + written, data.count - written)
+            let n = data[written...].withUnsafeBufferPointer { buf in
+                guard let base = buf.baseAddress else { return -1 }
+                return Darwin.write(fileDescriptor, base, buf.count)
             }
             if n <= 0 { return false }
             written += n

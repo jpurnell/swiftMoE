@@ -39,7 +39,8 @@ struct ExpertFileTests {
         let file = try ExpertFile(path: path)
         var buffer = [UInt8](repeating: 0, count: expertSize)
         let bytesRead = try buffer.withUnsafeMutableBytes { ptr in
-            try file.readExpert(index: 0, into: ptr.baseAddress!, expertSize: expertSize)
+            guard let base = ptr.baseAddress else { return 0 }
+            return try file.readExpert(index: 0, into: base, expertSize: expertSize)
         }
 
         #expect(bytesRead == expertSize)
@@ -59,7 +60,8 @@ struct ExpertFileTests {
         let file = try ExpertFile(path: path)
         var buffer = [UInt8](repeating: 0, count: expertSize)
         let bytesRead = try buffer.withUnsafeMutableBytes { ptr in
-            try file.readExpert(index: expertCount - 1, into: ptr.baseAddress!, expertSize: expertSize)
+            guard let base = ptr.baseAddress else { return 0 }
+            return try file.readExpert(index: expertCount - 1, into: base, expertSize: expertSize)
         }
 
         #expect(bytesRead == expertSize)
@@ -96,12 +98,13 @@ struct ExpertFileTests {
         var buf0 = [UInt8](repeating: 0, count: expertSize)
         var buf2 = [UInt8](repeating: 0, count: expertSize)
 
-        // Read expert 2 first, then expert 0 — order shouldn't matter (pread is position-independent)
         try buf2.withUnsafeMutableBytes { ptr in
-            try file.readExpert(index: 2, into: ptr.baseAddress!, expertSize: expertSize)
+            guard let base = ptr.baseAddress else { return }
+            try file.readExpert(index: 2, into: base, expertSize: expertSize)
         }
         try buf0.withUnsafeMutableBytes { ptr in
-            try file.readExpert(index: 0, into: ptr.baseAddress!, expertSize: expertSize)
+            guard let base = ptr.baseAddress else { return }
+            try file.readExpert(index: 0, into: base, expertSize: expertSize)
         }
 
         #expect(buf0[0] == 0)  // Expert 0

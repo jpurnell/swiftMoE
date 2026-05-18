@@ -37,14 +37,21 @@ public enum RoPE {
         rotaryDim: Int,
         theta: Float
     ) {
+        guard rotaryDim > 0 else { return }
         let halfDim = rotaryDim / 2
         let posFloat = Float(position)
+        let rotaryDimFloat = Float(rotaryDim)
+        guard rotaryDimFloat > 0, theta > 0 else { return }
+
+        let invRotaryDim = 1.0 / rotaryDimFloat
 
         // Apply to query heads
         for h in 0..<numHeads {
             let base = h * headDim
             for i in 0..<halfDim {
-                let freq = 1.0 / powf(theta, Float(2 * i) / Float(rotaryDim))
+                let exponent = Float(2 * i) * invRotaryDim
+                let base10 = powf(theta, exponent)
+                let freq = base10 > 0 ? 1.0 / base10 : 0.0
                 let angle = posFloat * freq
                 let cosA = cosf(angle)
                 let sinA = sinf(angle)
@@ -60,7 +67,9 @@ public enum RoPE {
         for h in 0..<numKVHeads {
             let base = h * headDim
             for i in 0..<halfDim {
-                let freq = 1.0 / powf(theta, Float(2 * i) / Float(rotaryDim))
+                let exponent = Float(2 * i) * invRotaryDim
+                let base10 = powf(theta, exponent)
+                let freq = base10 > 0 ? 1.0 / base10 : 0.0
                 let angle = posFloat * freq
                 let cosA = cosf(angle)
                 let sinA = sinf(angle)

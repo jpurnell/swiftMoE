@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 
 /// Minimal HTTP server for OpenAI-compatible chat completions with SSE streaming.
 ///
@@ -25,6 +28,7 @@ public final class HTTPServer {
 
     private let handler: RequestHandler
     private var serverFD: Int32 = -1
+    private var shouldStop = false
 
     /// Creates an HTTP server.
     ///
@@ -49,41 +53,29 @@ public final class HTTPServer {
         var opt: Int32 = 1
         setsockopt(serverFD, SOL_SOCKET, SO_REUSEADDR, &opt, socklen_t(MemoryLayout<Int32>.size))
 
-        // Bind
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = INADDR_ANY.bigEndian
 
-        let bindResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                bind(serverFD, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
+        let bindResult = Self.bindSocket(serverFD, &addr)
         guard bindResult == 0 else {
             close(serverFD)
             throw FlashMoEError.readFailed(errno: errno, context: "bind(port: \(port))")
         }
 
-        // Listen
         guard listen(serverFD, 5) == 0 else {
             close(serverFD)
             throw FlashMoEError.readFailed(errno: errno, context: "listen()")
         }
 
-        print("[server] Listening on http://localhost:\(port)/v1/chat/completions")
+        logger.info("[server] Listening on http://localhost:\(self.port, privacy: .public)/v1/chat/completions")
 
-        // Accept loop
-        while true {
+        while !shouldStop {
             var clientAddr = sockaddr_in()
             var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
 
-            let clientFD = withUnsafeMutablePointer(to: &clientAddr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                    accept(serverFD, sockPtr, &addrLen)
-                }
-            }
-
+            let clientFD = Self.acceptSocket(serverFD, &clientAddr, &addrLen)
             guard clientFD >= 0 else { continue }
 
             handleConnection(clientFD)
@@ -93,6 +85,7 @@ public final class HTTPServer {
 
     /// Stops the server.
     public func stop() {
+        shouldStop = true
         if serverFD >= 0 {
             close(serverFD)
             serverFD = -1
@@ -108,8 +101,9 @@ public final class HTTPServer {
 
         // Read until we find \r\n\r\n (end of headers)
         buf.withUnsafeMutableBufferPointer { bufPtr in
+            guard let base = bufPtr.baseAddress else { return }
             while total < bufPtr.count - 1 {
-                let n = Darwin.read(clientFD, bufPtr.baseAddress! + total, 1)
+                let n = Darwin.read(clientFD, base + total, 1)
                 if n <= 0 { return }
                 total += 1
                 if total >= 4 &&
@@ -128,9 +122,10 @@ public final class HTTPServer {
             if let contentLen = Int(afterCL.prefix(while: { $0.isNumber || $0 == " " }).trimmingCharacters(in: .whitespaces)) {
                 if contentLen > 0 && total + contentLen < buf.count - 1 {
                     buf.withUnsafeMutableBufferPointer { bufPtr in
+                        guard let base = bufPtr.baseAddress else { return }
                         var bodyRead = 0
                         while bodyRead < contentLen {
-                            let n = Darwin.read(clientFD, bufPtr.baseAddress! + total + bodyRead, contentLen - bodyRead)
+                            let n = Darwin.read(clientFD, base + total + bodyRead, contentLen - bodyRead)
                             if n <= 0 { break }
                             bodyRead += n
                         }
@@ -145,8 +140,10 @@ public final class HTTPServer {
         // Handle CORS preflight
         if headerString.hasPrefix("OPTIONS") {
             let response = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n\r\n"
-            _ = response.withCString { cstr in
-                Darwin.write(clientFD, cstr, strlen(cstr))
+            let responseBytes = Array(response.utf8)
+            responseBytes.withUnsafeBufferPointer { respBuf in
+                guard let base = respBuf.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, respBuf.count)
             }
             return
         }
@@ -154,8 +151,10 @@ public final class HTTPServer {
         // Only handle POST /v1/chat/completions
         guard headerString.hasPrefix("POST") && headerString.contains("/v1/chat/completions") else {
             let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
-            _ = response.withCString { cstr in
-                Darwin.write(clientFD, cstr, strlen(cstr))
+            let responseBytes = Array(response.utf8)
+            responseBytes.withUnsafeBufferPointer { respBuf in
+                guard let base = respBuf.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, respBuf.count)
             }
             return
         }
@@ -170,19 +169,42 @@ public final class HTTPServer {
 
     /// Extracts the last "content" value from an OpenAI messages array.
     private func extractLastContent(from request: String) -> String? {
-        // Find the body (after \r\n\r\n)
         guard let bodyStart = request.range(of: "\r\n\r\n") else { return nil }
         let body = String(request[bodyStart.upperBound...])
 
-        // Parse JSON
-        guard let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let messages = json["messages"] as? [[String: Any]] else {
+        guard let data = body.data(using: .utf8) else { return nil }
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let messages = json["messages"] as? [[String: Any]] else {
+                return nil
+            }
+            return messages.last?["content"] as? String
+        } catch {
+            logger.debug("Failed to parse chat request JSON: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
 
-        // Return the last message's content
-        return messages.last?["content"] as? String
+    /// Binds a socket to a sockaddr_in using heap-allocated storage to avoid nested withUnsafe scopes.
+    private static func bindSocket(_ fd: Int32, _ addr: inout sockaddr_in) -> Int32 {
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: MemoryLayout<sockaddr_in>.size,
+                                                    alignment: MemoryLayout<sockaddr_in>.alignment)
+        defer { raw.deallocate() }
+        raw.storeBytes(of: addr, as: sockaddr_in.self)
+        let sockPtr = raw.assumingMemoryBound(to: sockaddr.self)
+        return bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+    }
+
+    /// Accepts a connection using heap-allocated storage to avoid nested withUnsafe scopes.
+    private static func acceptSocket(_ fd: Int32, _ addr: inout sockaddr_in, _ addrLen: inout socklen_t) -> Int32 {
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: MemoryLayout<sockaddr_in>.size,
+                                                    alignment: MemoryLayout<sockaddr_in>.alignment)
+        defer { raw.deallocate() }
+        raw.storeBytes(of: addr, as: sockaddr_in.self)
+        let sockPtr = raw.assumingMemoryBound(to: sockaddr.self)
+        let result = accept(fd, sockPtr, &addrLen)
+        addr = raw.load(as: sockaddr_in.self)
+        return result
     }
 
     /// Extracts max_tokens or max_completion_tokens from request body.
@@ -190,13 +212,17 @@ public final class HTTPServer {
         guard let bodyStart = request.range(of: "\r\n\r\n") else { return defaultVal }
         let body = String(request[bodyStart.upperBound...])
 
-        guard let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = body.data(using: .utf8) else { return defaultVal }
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return defaultVal
+            }
+            if let max = json["max_completion_tokens"] as? Int { return max }
+            if let max = json["max_tokens"] as? Int { return max }
+            return defaultVal
+        } catch {
+            logger.debug("Failed to parse max_tokens JSON: \(error.localizedDescription, privacy: .public)")
             return defaultVal
         }
-
-        if let max = json["max_completion_tokens"] as? Int { return max }
-        if let max = json["max_tokens"] as? Int { return max }
-        return defaultVal
     }
 }

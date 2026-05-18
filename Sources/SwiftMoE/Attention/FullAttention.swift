@@ -41,7 +41,9 @@ public enum FullAttention {
         let numHeads = config.numAttentionHeads
         let numKVHeads = config.numKVHeads
         let headDim = config.headDim
+        guard headDim > 0, numKVHeads > 0 else { return }
         let headsPerKV = numHeads / numKVHeads
+        guard headsPerKV > 0 else { return }
         let kvDim = numKVHeads * headDim
 
         // Split Q projection into query and sigmoid gate
@@ -64,7 +66,8 @@ public enum FullAttention {
                 let offset = h * headDim
                 var sumSq: Float = 0
                 for d in 0..<headDim { sumSq += q[offset + d] * q[offset + d] }
-                let invRms = 1.0 / sqrtf(sumSq / Float(headDim) + config.rmsNormEps)
+                let rmsVal = sqrtf(sumSq / Float(headDim) + config.rmsNormEps)
+                let invRms = rmsVal > 0 ? 1.0 / rmsVal : 0.0
                 for d in 0..<headDim {
                     q[offset + d] = q[offset + d] * invRms * bf16ToFloat(normW[d])
                 }
@@ -77,7 +80,8 @@ public enum FullAttention {
                 let offset = h * headDim
                 var sumSq: Float = 0
                 for d in 0..<headDim { sumSq += kOut[offset + d] * kOut[offset + d] }
-                let invRms = 1.0 / sqrtf(sumSq / Float(headDim) + config.rmsNormEps)
+                let rmsVal = sqrtf(sumSq / Float(headDim) + config.rmsNormEps)
+                let invRms = rmsVal > 0 ? 1.0 / rmsVal : 0.0
                 for d in 0..<headDim {
                     kOut[offset + d] = kOut[offset + d] * invRms * bf16ToFloat(normW[d])
                 }
@@ -86,8 +90,9 @@ public enum FullAttention {
 
         // RoPE
         q.withUnsafeMutableBufferPointer { qBuf in
+            guard let qBase = qBuf.baseAddress else { return }
             RoPE.apply(
-                q: qBuf.baseAddress!, k: kOut,
+                q: qBase, k: kOut,
                 position: position,
                 numHeads: numHeads, numKVHeads: numKVHeads,
                 headDim: headDim, rotaryDim: config.rotaryDim,
@@ -98,7 +103,8 @@ public enum FullAttention {
         // Update KV cache
         kvCache.append(kPtr: UnsafePointer(kOut), vPtr: UnsafePointer(vOut))
         let seqLen = kvCache.length
-        let scale = 1.0 / sqrtf(Float(headDim))
+        let sqrtHeadDim = sqrtf(Float(headDim))
+        let scale = sqrtHeadDim > 0 ? 1.0 / sqrtHeadDim : 0.0
 
         // Scaled dot-product attention with GQA
         memset(output, 0, qDim * MemoryLayout<Float>.size)
@@ -107,15 +113,18 @@ public enum FullAttention {
             kvCache.withVCache { vCache in
                 for h in 0..<numHeads {
                     let kvH = h / headsPerKV
-                    let qH = q.withUnsafeBufferPointer { $0.baseAddress! + h * headDim }
 
                     // Compute attention scores
                     var scores = [Float](repeating: 0, count: seqLen)
-                    for p in 0..<seqLen {
-                        let kP = kCache + p * kvDim + kvH * headDim
-                        var dot: Float = 0
-                        for d in 0..<headDim { dot += qH[d] * kP[d] }
-                        scores[p] = dot * scale
+                    q.withUnsafeBufferPointer { qBuf in
+                        guard let qBase = qBuf.baseAddress else { return }
+                        let qH = qBase + h * headDim
+                        for p in 0..<seqLen {
+                            let kP = kCache + p * kvDim + kvH * headDim
+                            var dot: Float = 0
+                            for d in 0..<headDim { dot += qH[d] * kP[d] }
+                            scores[p] = dot * scale
+                        }
                     }
 
                     // Softmax
@@ -135,7 +144,8 @@ public enum FullAttention {
 
         // Apply sigmoid gate: output *= sigmoid(qGate)
         for i in 0..<qDim {
-            let g = 1.0 / (1.0 + expf(-qGate[i]))
+            let denom = 1.0 + expf(-qGate[i])
+            let g = denom > 0 ? 1.0 / denom : 0.5
             output[i] *= g
         }
     }

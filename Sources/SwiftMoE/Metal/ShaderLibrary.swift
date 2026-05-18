@@ -13,27 +13,46 @@ public struct ShaderLibrary: Sendable {
 
     // MARK: - Required Pipelines
 
+    /// 4-bit dequant matvec kernel (v3, 8 rows/threadgroup, for dim <= 4096).
     public let matvecV3: MTLComputePipelineState
+    /// 4-bit dequant matvec kernel (v5, alternative tiling strategy).
     public let matvecV5: MTLComputePipelineState
+    /// 4-bit dequant matvec kernel (fast, 1 row/threadgroup, for large dims).
     public let matvecFast: MTLComputePipelineState
+    /// 2-bit dequant matvec kernel for requantized experts.
     public let matvec2Bit: MTLComputePipelineState
+    /// RMS norm pass 1: computes sum of squares reduction.
     public let rmsNormSum: MTLComputePipelineState
+    /// RMS norm pass 2: applies normalization with float weights.
     public let rmsNormApply: MTLComputePipelineState
+    /// RMS norm pass 2: applies normalization with BF16 weights.
     public let rmsNormApplyBf16: MTLComputePipelineState
+    /// Element-wise residual addition.
     public let residualAdd: MTLComputePipelineState
+    /// Fused SwiGLU activation (gate * silu(up)).
     public let swiglu: MTLComputePipelineState
+    /// Batched attention: Q @ K^T score computation.
     public let attnScores: MTLComputePipelineState
+    /// Batched attention: softmax over scores.
     public let attnSoftmax: MTLComputePipelineState
+    /// Batched attention: scores @ V value computation.
     public let attnValues: MTLComputePipelineState
+    /// Sigmoid gating for shared expert contribution.
     public let sigmoidGate: MTLComputePipelineState
+    /// Fused MoE combine + residual + norm kernel.
     public let moeCombineResidual: MTLComputePipelineState
 
     // MARK: - Optional Pipelines (GPU linear attention — CPU fallback if nil)
 
+    /// GatedDeltaNet recurrence step (GPU accelerated).
     public let deltaNetStep: MTLComputePipelineState?
+    /// Conv1d single-step kernel for linear attention.
     public let conv1dStep: MTLComputePipelineState?
+    /// Fused RMS norm for Q and K projections.
     public let rmsNormQK: MTLComputePipelineState?
+    /// Computes per-head decay and beta from a_log and dt_bias.
     public let computeDecayBeta: MTLComputePipelineState?
+    /// Gated RMS normalization for linear attention output.
     public let gatedRmsNorm: MTLComputePipelineState?
 
     /// Compiles shaders from source and creates all pipeline states.
@@ -43,6 +62,7 @@ public struct ShaderLibrary: Sendable {
     ///   - shaderPath: Path to `shaders.metal` source file.
     /// - Throws: ``FlashMoEError/fileNotFound(path:)`` or ``FlashMoEError/shaderCompilationFailed(reason:)``.
     public init(device: MTLDevice, shaderPath: String) throws {
+        // silent: non-critical path — throws a more specific error below
         guard let source = try? String(contentsOfFile: shaderPath, encoding: .utf8) else {
             throw FlashMoEError.fileNotFound(path: shaderPath)
         }
@@ -63,7 +83,7 @@ public struct ShaderLibrary: Sendable {
         // Helper to create a pipeline state from a function name
         func makePipeline(_ name: String) -> MTLComputePipelineState? {
             guard let function = library.makeFunction(name: name) else { return nil }
-            return try? device.makeComputePipelineState(function: function)
+            return try? device.makeComputePipelineState(function: function) // silent: optional pipelines return nil on failure
         }
 
         func requirePipeline(_ name: String) throws -> MTLComputePipelineState {

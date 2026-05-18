@@ -57,7 +57,9 @@ public final class WeightFile {
 
     /// Returns a typed pointer to a tensor within the mmap'd data.
     ///
-    /// - Parameter name: Full tensor name (e.g., "model.layers.0.input_layernorm.weight").
+    /// - Parameters:
+    ///   - name: Full tensor name (e.g., "model.layers.0.input_layernorm.weight").
+    ///   - type: The element type to bind the pointer to (e.g., `Float.self`, `UInt32.self`).
     /// - Returns: Pointer to the tensor data, or `nil` if the tensor isn't in the manifest.
     public func tensorPointer<T>(name: String, as type: T.Type = T.self) -> UnsafePointer<T>? {
         guard let info = manifest[name] else { return nil }

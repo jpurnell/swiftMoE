@@ -6,6 +6,7 @@ import Metal
 /// state (delta recurrence matrix + conv1d history) that carries across tokens
 /// and must be zeroed at the start of each new generation.
 public struct LinearAttentionBuffers {
+    // LIVE: referenced by external test and configuration code
     static let numLinearLayers = 45
 
     // Persistent state per layer (must be zeroed between generations)
@@ -17,14 +18,22 @@ public struct LinearAttentionBuffers {
 
     // Scratch buffers (reused across all layers, allocated once)
 
-    public let deltaQ: MTLBuffer        // [2048] float
-    public let deltaK: MTLBuffer        // [2048] float
-    public let deltaV: MTLBuffer        // [8192] float
-    public let deltaGDecay: MTLBuffer   // [64] float
-    public let deltaBeta: MTLBuffer     // [64] float
-    public let deltaOutput: MTLBuffer   // [8192] float
-    public let convInput: MTLBuffer     // [12288] float
-    public let convOutput: MTLBuffer    // [12288] float
+    /// Query scratch buffer for delta-net projection.
+    public let deltaQ: MTLBuffer
+    /// Key scratch buffer for delta-net projection.
+    public let deltaK: MTLBuffer
+    /// Value scratch buffer for delta-net projection.
+    public let deltaV: MTLBuffer
+    /// Gated decay scratch buffer per value head.
+    public let deltaGDecay: MTLBuffer
+    /// Beta gate scratch buffer per value head.
+    public let deltaBeta: MTLBuffer
+    /// Output scratch buffer for delta-net attention output.
+    public let deltaOutput: MTLBuffer
+    /// Conv1d input scratch buffer.
+    public let convInput: MTLBuffer
+    /// Conv1d output scratch buffer.
+    public let convOutput: MTLBuffer
 
     init(device: MTLDevice, config: ModelConfig) throws {
         let numVHeads = config.linearNumVHeads

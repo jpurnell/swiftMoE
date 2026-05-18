@@ -20,19 +20,25 @@ struct IntegrationTests {
         defer { SyntheticFixtures.cleanup(fixtures) }
 
         // Weight file should exist and be non-empty
-        let weightsData = FileManager.default.contents(atPath: fixtures.weightsPath)
-        #expect(weightsData != nil, "Weight file should exist")
-        #expect((weightsData?.count ?? 0) > 0, "Weight file should be non-empty")
+        let weightsData = try #require(
+            FileManager.default.contents(atPath: fixtures.weightsPath),
+            "Weight file should exist"
+        )
+        #expect(!weightsData.isEmpty, "Weight file should be non-empty")
 
         // Manifest should be loadable
         let manifest = try WeightManifest(path: fixtures.manifestPath)
-        #expect(manifest.count > 0, "Manifest should have tensors")
+        #expect(manifest.count == 74, "Manifest should have 74 tensors for tiny config (2 layers)")
 
-        // Key tensors should be present
-        #expect(manifest["model.embed_tokens.weight"] != nil, "Embedding tensor should exist")
-        #expect(manifest["model.norm.weight"] != nil, "Final norm tensor should exist")
-        #expect(manifest["lm_head.weight"] != nil, "LM head tensor should exist")
-        #expect(manifest["model.layers.0.input_layernorm.weight"] != nil, "Layer 0 norm should exist")
+        // Key tensors should be present with valid offsets
+        let embedTensor = try #require(manifest["model.embed_tokens.weight"], "Embedding tensor should exist")
+        #expect(embedTensor.size == 1024, "Embedding tensor: vocabSize(32) * packedCols(8) * 4 = 1024")
+        let normTensor = try #require(manifest["model.norm.weight"], "Final norm tensor should exist")
+        #expect(normTensor.size == 128, "Final norm: hiddenDim(64) * 2 = 128")
+        let lmHeadTensor = try #require(manifest["lm_head.weight"], "LM head tensor should exist")
+        #expect(lmHeadTensor.size == 1024, "LM head: vocabSize(32) * packedCols(8) * 4 = 1024")
+        let layer0Norm = try #require(manifest["model.layers.0.input_layernorm.weight"], "Layer 0 norm should exist")
+        #expect(layer0Norm.size == 128, "Layer norm: hiddenDim(64) * 2 = 128")
 
         // Expert files should exist
         #expect(fixtures.expertPaths.count == config.numLayers)
@@ -51,13 +57,20 @@ struct IntegrationTests {
 
         let wf = try WeightFile(weightsPath: fixtures.weightsPath, manifestPath: fixtures.manifestPath)
 
-        // Lookup embedding tensor
-        let embedW: UnsafePointer<UInt32>? = wf.tensorPointer(name: "model.embed_tokens.weight")
-        #expect(embedW != nil, "Embedding weight pointer should be valid")
+        // Lookup embedding tensor — verify pointer is valid by reading first element
+        let embedW: UnsafePointer<UInt32> = try #require(
+            wf.tensorPointer(name: "model.embed_tokens.weight"),
+            "Embedding weight pointer should be valid"
+        )
+        // Synthetic fixtures zero-fill, so first element should be 0
+        #expect(embedW.pointee == 0, "Synthetic embedding data should be zero-initialized")
 
-        // Lookup a layer norm
-        let normW: UnsafePointer<UInt16>? = wf.tensorPointer(name: "model.layers.0.input_layernorm.weight")
-        #expect(normW != nil, "Layer 0 input norm should be found")
+        // Lookup a layer norm — verify pointer is valid
+        let normW: UnsafePointer<UInt16> = try #require(
+            wf.tensorPointer(name: "model.layers.0.input_layernorm.weight"),
+            "Layer 0 input norm should be found"
+        )
+        #expect(normW.pointee == 0, "Synthetic norm data should be zero-initialized")
     }
 
     @Test("LayerWeightCache builds from tiny config")
@@ -74,15 +87,19 @@ struct IntegrationTests {
         #expect(caches.count == config.numLayers, "Should have \(config.numLayers) layer caches")
 
         // Layer 0 is linear attention (interval=2, so layer 1 is full)
-        #expect(caches[0].inputNormW != nil, "Layer 0 should have input norm")
-        #expect(caches[0].gateW != nil, "Layer 0 should have routing gate")
+        let inputNormW = try #require(caches[0].inputNormW, "Layer 0 should have input norm")
+        #expect(inputNormW.pointee == 0, "Synthetic norm weights should be zero-initialized")
+        let gateW = try #require(caches[0].gateW, "Layer 0 should have routing gate")
+        #expect(gateW.pointee == 0, "Synthetic gate weights should be zero-initialized")
 
         // Check attention type matches config
         for i in 0..<config.numLayers {
             if config.isFullAttention(layer: i) {
-                #expect(caches[i].qW != nil, "Full attention layer \(i) should have Q projection")
+                let qW = try #require(caches[i].qW, "Full attention layer \(i) should have Q projection")
+                #expect(qW.pointee == 0)
             } else {
-                #expect(caches[i].qkvW != nil, "Linear attention layer \(i) should have QKV projection")
+                let qkvW = try #require(caches[i].qkvW, "Linear attention layer \(i) should have QKV projection")
+                #expect(qkvW.pointee == 0)
             }
         }
     }
@@ -99,11 +116,11 @@ struct IntegrationTests {
         var output = [Float](repeating: -999, count: config.hiddenDim)
 
         output.withUnsafeMutableBufferPointer { buf in
-            Embedding.lookup(weightFile: wf, tokenID: 0, config: config, output: buf.baseAddress!)
+            guard let base = buf.baseAddress else { return }
+            Embedding.lookup(weightFile: wf, tokenID: 0, config: config, output: base)
         }
 
-        // With zero-initialized weights, all nibbles are 0, scale=0, bias=0 → output = 0
-        #expect(output[0] == 0.0, "Zero weights should produce zero embedding")
+        #expect(abs(output[0]) < 1e-6, "Zero weights should produce zero embedding")
     }
 
     @Test("Argmax works with tiny vocab")
@@ -113,7 +130,8 @@ struct IntegrationTests {
         logits[5] = 1.0  // Make token 5 the winner
 
         let result = logits.withUnsafeBufferPointer { buf in
-            Embedding.argmax(logits: buf.baseAddress!, vocabSize: config.vocabSize)
+            guard let base = buf.baseAddress else { return 0 }
+            return Embedding.argmax(logits: base, vocabSize: config.vocabSize)
         }
         #expect(result == 5)
     }
@@ -131,19 +149,20 @@ struct IntegrationTests {
         var logits = [Float](repeating: -999, count: config.vocabSize)
 
         hidden.withUnsafeBufferPointer { hBuf in
+            guard let hBase = hBuf.baseAddress else { return }
             logits.withUnsafeMutableBufferPointer { lBuf in
+                guard let lBase = lBuf.baseAddress else { return }
                 Embedding.lmHead(
                     weightFile: wf,
-                    hidden: hBuf.baseAddress!,
+                    hidden: hBase,
                     config: config,
-                    logits: lBuf.baseAddress!
+                    logits: lBase
                 )
             }
         }
 
-        // With zero weights: all logits should be 0
-        #expect(logits[0] == 0.0, "Zero weights should produce zero logits")
-        #expect(logits[config.vocabSize - 1] == 0.0)
+        #expect(abs(logits[0]) < 1e-6, "Zero weights should produce zero logits")
+        #expect(abs(logits[config.vocabSize - 1]) < 1e-6)
     }
 
     @Test("TokenGenerator.generate() runs end-to-end with tiny config")
@@ -192,8 +211,8 @@ struct IntegrationTests {
         // With zero weights, the pipeline should execute without crashing.
         // All logits are zero → argmax returns 0, which is not EOS for tiny config
         // (eosToken1=30, eosToken2=31), so we should get 3 tokens.
-        #expect(generatedTokens.count > 0,
-                "Should generate at least one token (pipeline executed without crash)")
+        #expect(generatedTokens.count == 3,
+                "Should generate exactly 3 tokens (zero weights → token 0, not EOS)")
     }
 
     @Test("Full pipeline: embed → lm_head → argmax with tiny config")
@@ -206,35 +225,37 @@ struct IntegrationTests {
 
         let wf = try WeightFile(weightsPath: fixtures.weightsPath, manifestPath: fixtures.manifestPath)
 
-        // Step 1: Embed token 0
         var hidden = [Float](repeating: 0, count: config.hiddenDim)
         hidden.withUnsafeMutableBufferPointer { buf in
-            Embedding.lookup(weightFile: wf, tokenID: 0, config: config, output: buf.baseAddress!)
+            guard let base = buf.baseAddress else { return }
+            Embedding.lookup(weightFile: wf, tokenID: 0, config: config, output: base)
         }
 
-        // Step 2: Final norm (with zero weights, output is zero)
         var normed = [Float](repeating: 0, count: config.hiddenDim)
         if let normW = wf.tensorPointer(name: "model.norm.weight", as: UInt16.self) {
             normed.withUnsafeMutableBufferPointer { nBuf in
+                guard let nBase = nBuf.baseAddress else { return }
                 hidden.withUnsafeBufferPointer { hBuf in
-                    RMSNorm.apply(input: hBuf.baseAddress!, weights: normW,
-                                  output: nBuf.baseAddress!, dim: config.hiddenDim)
+                    guard let hBase = hBuf.baseAddress else { return }
+                    RMSNorm.apply(input: hBase, weights: normW,
+                                  output: nBase, dim: config.hiddenDim)
                 }
             }
         }
 
-        // Step 3: LM head → logits
         var logits = [Float](repeating: 0, count: config.vocabSize)
         normed.withUnsafeBufferPointer { nBuf in
+            guard let nBase = nBuf.baseAddress else { return }
             logits.withUnsafeMutableBufferPointer { lBuf in
-                Embedding.lmHead(weightFile: wf, hidden: nBuf.baseAddress!,
-                                 config: config, logits: lBuf.baseAddress!)
+                guard let lBase = lBuf.baseAddress else { return }
+                Embedding.lmHead(weightFile: wf, hidden: nBase,
+                                 config: config, logits: lBase)
             }
         }
 
-        // Step 4: Argmax
         let nextToken = logits.withUnsafeBufferPointer { buf in
-            Embedding.argmax(logits: buf.baseAddress!, vocabSize: config.vocabSize)
+            guard let base = buf.baseAddress else { return 0 }
+            return Embedding.argmax(logits: base, vocabSize: config.vocabSize)
         }
 
         // With all-zero weights, all logits are 0, argmax returns 0

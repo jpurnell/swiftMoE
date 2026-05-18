@@ -18,70 +18,114 @@ public struct LayerWeightPointers {
 
     // MARK: - Full Attention Projections (15 layers)
 
+    /// Query projection weights (packed 4-bit).
     public var qW: UnsafePointer<UInt32>?
+    /// Query projection scales (BF16).
     public var qS: UnsafePointer<UInt16>?
+    /// Query projection biases (BF16).
     public var qB: UnsafePointer<UInt16>?
+    /// Key projection weights (packed 4-bit).
     public var kW: UnsafePointer<UInt32>?
+    /// Key projection scales (BF16).
     public var kS: UnsafePointer<UInt16>?
+    /// Key projection biases (BF16).
     public var kB: UnsafePointer<UInt16>?
+    /// Value projection weights (packed 4-bit).
     public var vW: UnsafePointer<UInt32>?
+    /// Value projection scales (BF16).
     public var vS: UnsafePointer<UInt16>?
+    /// Value projection biases (BF16).
     public var vB: UnsafePointer<UInt16>?
+    /// Output projection weights (packed 4-bit).
     public var oW: UnsafePointer<UInt32>?
+    /// Output projection scales (BF16).
     public var oS: UnsafePointer<UInt16>?
+    /// Output projection biases (BF16).
     public var oB: UnsafePointer<UInt16>?
+    /// Query RMS norm weights (BF16).
     public var qNormW: UnsafePointer<UInt16>?
+    /// Key RMS norm weights (BF16).
     public var kNormW: UnsafePointer<UInt16>?
 
     // MARK: - Linear Attention Projections (45 layers)
 
+    /// Fused QKV projection weights (packed 4-bit).
     public var qkvW: UnsafePointer<UInt32>?
+    /// Fused QKV projection scales (BF16).
     public var qkvS: UnsafePointer<UInt16>?
+    /// Fused QKV projection biases (BF16).
     public var qkvB: UnsafePointer<UInt16>?
+    /// Z (gate) projection weights (packed 4-bit).
     public var zW: UnsafePointer<UInt32>?
+    /// Z (gate) projection scales (BF16).
     public var zS: UnsafePointer<UInt16>?
+    /// Z (gate) projection biases (BF16).
     public var zB: UnsafePointer<UInt16>?
+    /// Beta (update gate) projection weights (packed 4-bit).
     public var betaW: UnsafePointer<UInt32>?
+    /// Beta (update gate) projection scales (BF16).
     public var betaS: UnsafePointer<UInt16>?
+    /// Beta (update gate) projection biases (BF16).
     public var betaB: UnsafePointer<UInt16>?
+    /// Alpha (decay) projection weights (packed 4-bit).
     public var alphaW: UnsafePointer<UInt32>?
+    /// Alpha (decay) projection scales (BF16).
     public var alphaS: UnsafePointer<UInt16>?
+    /// Alpha (decay) projection biases (BF16).
     public var alphaB: UnsafePointer<UInt16>?
+    /// Conv1d kernel weights (BF16).
     public var conv1dW: UnsafePointer<UInt16>?
+    /// Logarithmic decay factors for GatedDeltaNet.
     public var aLog: UnsafePointer<Float>?
+    /// Delta-net time-step bias (BF16).
     public var dtBias: UnsafePointer<UInt16>?
+    /// Gated RMS norm weights for linear attention output (BF16).
     public var gatedNormW: UnsafePointer<UInt16>?
+    /// Output projection weights (packed 4-bit).
     public var outProjW: UnsafePointer<UInt32>?
+    /// Output projection scales (BF16).
     public var outProjS: UnsafePointer<UInt16>?
+    /// Output projection biases (BF16).
     public var outProjB: UnsafePointer<UInt16>?
 
     // MARK: - MoE Routing + Shared Expert
 
-    /// Router gate projection.
+    /// Router gate projection weights (packed 4-bit).
     public var gateW: UnsafePointer<UInt32>?
+    /// Router gate projection scales (BF16).
     public var gateS: UnsafePointer<UInt16>?
+    /// Router gate projection biases (BF16).
     public var gateB: UnsafePointer<UInt16>?
 
-    /// Shared expert gate projection.
+    /// Shared expert gate projection weights (packed 4-bit).
     public var sharedGateW: UnsafePointer<UInt32>?
+    /// Shared expert gate projection scales (BF16).
     public var sharedGateS: UnsafePointer<UInt16>?
+    /// Shared expert gate projection biases (BF16).
     public var sharedGateB: UnsafePointer<UInt16>?
 
-    /// Shared expert up projection.
+    /// Shared expert up projection weights (packed 4-bit).
     public var sharedUpW: UnsafePointer<UInt32>?
+    /// Shared expert up projection scales (BF16).
     public var sharedUpS: UnsafePointer<UInt16>?
+    /// Shared expert up projection biases (BF16).
     public var sharedUpB: UnsafePointer<UInt16>?
 
-    /// Shared expert gate (sigmoid).
+    /// Shared expert sigmoid gate weights (packed 4-bit).
     public var sharedExpertGateW: UnsafePointer<UInt32>?
+    /// Shared expert sigmoid gate scales (BF16).
     public var sharedExpertGateS: UnsafePointer<UInt16>?
+    /// Shared expert sigmoid gate biases (BF16).
     public var sharedExpertGateB: UnsafePointer<UInt16>?
 
-    /// Shared expert down projection.
+    /// Shared expert down projection weights (packed 4-bit).
     public var sharedDownW: UnsafePointer<UInt32>?
+    /// Shared expert down projection scales (BF16).
     public var sharedDownS: UnsafePointer<UInt16>?
+    /// Shared expert down projection biases (BF16).
     public var sharedDownB: UnsafePointer<UInt16>?
 
+    /// Creates a new empty LayerWeightPointers.
     public init() {}
 }
 
@@ -93,7 +137,9 @@ public enum LayerWeightCacheBuilder {
 
     /// Builds weight pointer caches for all 60 layers.
     ///
-    /// - Parameter weightFile: The mmap'd weight file.
+    /// - Parameters:
+    ///   - weightFile: The mmap'd weight file.
+    ///   - config: Model configuration providing layer count and attention layout.
     /// - Returns: Array of 60 `LayerWeightPointers`, one per layer.
     public static func build(from weightFile: WeightFile, config: ModelConfig) -> [LayerWeightPointers] {
         var caches = [LayerWeightPointers](repeating: LayerWeightPointers(), count: config.numLayers)

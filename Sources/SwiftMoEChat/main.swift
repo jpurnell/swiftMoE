@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftMoE
 import CLineNoise
 
@@ -15,6 +16,10 @@ import CLineNoise
 //   /clear          — Clear session history
 //   /sessions       — List saved sessions
 // ============================================================================
+
+private let logger = Logger(subsystem: "com.swiftmoe.chat", category: "main")
+private let allowedSchemes: Set<String> = ["http", "https"]
+private let allowedHosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
 struct ChatConfig {
     var serverURL: String = "http://localhost:8080"
@@ -41,8 +46,20 @@ func parseArgs() -> ChatConfig {
     return config
 }
 
+/// Validates a URL string against the scheme/host allowlists to prevent SSRF (CWE-918).
+/// Returns the validated URL only if scheme and host are in the allowlist.
+func validateServerURL(_ urlString: String) -> URL? {
+    guard let components = URLComponents(string: urlString),
+          let scheme = components.host != nil ? components.scheme?.lowercased() : nil,
+          allowedSchemes.contains(scheme),
+          let host = components.host?.lowercased(),
+          allowedHosts.contains(host) else {
+        return nil
+    }
+    return components.url
+}
+
 func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
-    // Build request body
     let body: [String: Any] = [
         "model": "flash-moe",
         "messages": [["role": "user", "content": prompt]],
@@ -50,9 +67,16 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
         "stream": true
     ]
 
-    guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
-          let requestURL = URL(string: "\(url)/v1/chat/completions") else {
-        print("[error] Failed to create request")
+    let jsonData: Data
+    do {
+        jsonData = try JSONSerialization.data(withJSONObject: body)
+    } catch {
+        logger.error("Failed to serialize request body: \(error.localizedDescription, privacy: .public)")
+        return
+    }
+
+    guard let requestURL = validateServerURL("\(url)/v1/chat/completions") else {
+        logger.error("Invalid or disallowed server URL: \(url, privacy: .public)")
         return
     }
 
@@ -61,24 +85,22 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = jsonData
 
-    // Synchronous request with streaming response
     let semaphore = DispatchSemaphore(value: 0)
 
     let task = URLSession.shared.dataTask(with: request) { data, response, error in
         defer { semaphore.signal() }
 
         if let error = error {
-            print("\n[error] \(error.localizedDescription)")
+            logger.error("Request failed: \(error.localizedDescription, privacy: .public)")
             return
         }
 
         guard let data = data,
               let text = String(data: data, encoding: .utf8) else {
-            print("\n[error] No response data")
+            logger.error("No response data")
             return
         }
 
-        // Parse SSE events
         for line in text.components(separatedBy: "\n") {
             guard line.hasPrefix("data: ") else { continue }
             let payload = String(line.dropFirst(6))
@@ -86,15 +108,16 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
             if payload == "[DONE]" { break }
 
             if let eventData = payload.data(using: .utf8),
+               // silent: unparseable SSE events are intentionally skipped
                let json = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
                let choices = json["choices"] as? [[String: Any]],
                let delta = choices.first?["delta"] as? [String: Any],
                let content = delta["content"] as? String {
-                print(content, terminator: "")
+                FileHandle.standardOutput.write(Data(content.utf8))
                 fflush(stdout)
             }
         }
-        print()  // Newline after response
+        FileHandle.standardOutput.write(Data("\n".utf8))
     }
     task.resume()
     semaphore.wait()
@@ -104,24 +127,32 @@ func main() {
     let chatConfig = parseArgs()
     let session = SessionStore(sessionID: chatConfig.sessionID)
 
-    print("Flash-MoE Chat")
-    print("Server: \(chatConfig.serverURL)")
-    print("Session: \(session.sessionID)")
-    print("Type /quit to exit, /sessions to list saved sessions\n")
+    logger.info("Flash-MoE Chat")
+    logger.info("Server: \(chatConfig.serverURL, privacy: .public)")
+    logger.info("Session: \(session.sessionID, privacy: .public)")
+    logger.info("Type /quit to exit, /sessions to list saved sessions")
 
-    // Set up linenoise
     linenoiseSetMultiLine(1)
     linenoiseHistorySetMaxLen(100)
 
-    // Load history
     let home = ProcessInfo.processInfo.environment["HOME"] ?? "/tmp"
-    let historyPath = "\(home)/.flash-moe/history"
-    try? FileManager.default.createDirectory(
-        atPath: "\(home)/.flash-moe", withIntermediateDirectories: true)
+    let homeURL = URL(fileURLWithPath: home).standardized
+    let flashMoeDirURL = URL(fileURLWithPath: home)
+        .appendingPathComponent(".flash-moe").standardized
+    guard flashMoeDirURL.path.hasPrefix(homeURL.path) else {
+        logger.error("Resolved config path escapes home directory")
+        return
+    }
+    let historyPath = flashMoeDirURL.appendingPathComponent("history").path
+    do {
+        try FileManager.default.createDirectory(at: flashMoeDirURL, withIntermediateDirectories: true)
+    } catch {
+        logger.error("Failed to create config directory: \(error.localizedDescription, privacy: .public)")
+    }
     linenoiseHistoryLoad(historyPath)
 
-    // Chat loop
-    while true {
+    var shouldExit = false
+    while !shouldExit {
         guard let cLine = linenoise("You> ") else {
             break  // EOF / Ctrl-D
         }
@@ -131,42 +162,38 @@ func main() {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { continue }
 
-        // Handle commands
         if trimmed == "/quit" || trimmed == "/exit" {
-            break
+            shouldExit = true
+            continue
         }
         if trimmed == "/clear" {
-            print("[cleared session]")
+            logger.info("[cleared session]")
             continue
         }
         if trimmed == "/sessions" {
             let sessions = session.listSessions()
             if sessions.isEmpty {
-                print("[no saved sessions]")
+                logger.info("[no saved sessions]")
             } else {
-                for s in sessions { print("  \(s)") }
+                for s in sessions { logger.info("\(s, privacy: .public)") }
             }
             continue
         }
 
-        // Add to history
         linenoiseHistoryAdd(trimmed)
         linenoiseHistorySave(historyPath)
 
-        // Save user message
         session.appendMessage(role: "user", content: trimmed)
 
-        // Send to server and stream response
-        print("Assistant> ", terminator: "")
+        FileHandle.standardOutput.write(Data("Assistant> ".utf8))
         fflush(stdout)
 
         sendChatRequest(url: chatConfig.serverURL, prompt: trimmed, maxTokens: chatConfig.maxTokens)
 
-        // Save assistant response (simplified — full impl would capture streamed tokens)
         session.appendMessage(role: "assistant", content: "(streamed response)")
     }
 
-    print("\nGoodbye!")
+    logger.info("Goodbye!")
 }
 
 main()

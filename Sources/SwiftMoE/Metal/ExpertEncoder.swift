@@ -12,8 +12,11 @@ public enum ExpertEncoder {
 
     /// Expert weight layout offsets within a packed expert binary.
     public struct ExpertOffsets: Sendable {
+        /// Byte offset to gate projection packed weights.
         public let gateW: Int, gateS: Int, gateB: Int
+        /// Byte offset to up projection packed weights.
         public let upW: Int, upS: Int, upB: Int
+        /// Byte offset to down projection packed weights.
         public let downW: Int, downS: Int, downB: Int
 
         /// 4-bit expert offsets (from infer.m:1711-1713).
@@ -48,6 +51,7 @@ public enum ExpertEncoder {
     /// - Parameters:
     ///   - context: Metal context with pipeline states.
     ///   - commandBuffer: Command buffer to encode into (not committed).
+    ///   - config: Model configuration providing expert dimensions and intermediate size.
     ///   - K: Number of active experts.
     ///   - valid: Which expert slots loaded successfully.
     ///   - expertBuffers: Per-expert weight data Metal buffers.

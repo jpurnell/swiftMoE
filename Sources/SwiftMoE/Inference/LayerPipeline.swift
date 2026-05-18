@@ -1,5 +1,8 @@
 import Metal
 import Foundation
+import os
+
+private let pipelineLogger = Logger(subsystem: "com.swiftmoe", category: "pipeline")
 
 /// Orchestrates the CMD1→CMD2→CMD3 pipeline for a single transformer layer.
 ///
@@ -51,6 +54,7 @@ public final class LayerPipeline {
     /// Per-phase timing accumulator.
     public var timing = LayerTiming()
 
+    /// Creates a new layer pipeline with the given Metal context and model configuration.
     public init(context: MetalContext, config: ModelConfig) {
         self.context = context
         self.config = config
@@ -134,12 +138,13 @@ public final class LayerPipeline {
         if prevGPUCombined {
             // FAST PATH: prev CMD3 already computed combine+norm into buf_input.
             // Submit CMD1 immediately — GPU queue serializes CMD3(N-1) then CMD1(N).
-            let cmd1 = context.queue.makeCommandBuffer()!
+            guard let cmd1 = context.queue.makeCommandBuffer() else {
+                preconditionFailure("Metal command buffer allocation failed")
+            }
             let specs = buildAttentionSpecs(weights: weights, isFull: isFull)
             if !specs.isEmpty {
                 BatchMatvec.encode(context: context, commandBuffer: cmd1, specs: specs)
             }
-            // GPU linear attention: append conv1d + delta-net encoders to CMD1
             let gpuLinearAttn = !isFull && GPULinearAttention.isAvailable(context: context, weights: weights)
             if gpuLinearAttn {
                 let linearIdx = config.linearAttentionIndex(layer: layerIndex)
@@ -172,7 +177,9 @@ public final class LayerPipeline {
             let gpuLinearAttn = !isFull && GPULinearAttention.isAvailable(context: context, weights: weights)
 
             if !specs.isEmpty, context.weightBuffer != nil {
-                let cmd1 = context.queue.makeCommandBuffer()!
+                guard let cmd1 = context.queue.makeCommandBuffer() else {
+                    preconditionFailure("Metal command buffer allocation failed")
+                }
                 BatchMatvec.encode(context: context, commandBuffer: cmd1, specs: specs)
                 if gpuLinearAttn {
                     let linearIdx = config.linearAttentionIndex(layer: layerIndex)
@@ -184,17 +191,20 @@ public final class LayerPipeline {
                 cmd1.waitUntilCompleted()
             } else if !specs.isEmpty {
                 // CPU fallback
-                for spec in specs {
-                    let outPtr = context.projections.batchSlots[spec.batchSlot].contents()
-                        .assumingMemoryBound(to: Float.self)
-                    Embedding.cpuDequantMatvec(
-                        W: spec.weights.assumingMemoryBound(to: UInt32.self),
-                        scales: spec.scales.assumingMemoryBound(to: UInt16.self),
-                        biases: spec.biases.assumingMemoryBound(to: UInt16.self),
-                        input: normedScratch.withUnsafeBufferPointer { $0.baseAddress! },
-                        output: outPtr,
-                        outDim: Int(spec.outDim), inDim: Int(spec.inDim),
-                        groupSize: Int(spec.groupSize))
+                normedScratch.withUnsafeBufferPointer { normedBuf in
+                    guard let normedBase = normedBuf.baseAddress else { return }
+                    for spec in specs {
+                        let outPtr = context.projections.batchSlots[spec.batchSlot].contents()
+                            .assumingMemoryBound(to: Float.self)
+                        Embedding.cpuDequantMatvec(
+                            W: spec.weights.assumingMemoryBound(to: UInt32.self),
+                            scales: spec.scales.assumingMemoryBound(to: UInt16.self),
+                            biases: spec.biases.assumingMemoryBound(to: UInt16.self),
+                            input: normedBase,
+                            output: outPtr,
+                            outDim: Int(spec.outDim), inDim: Int(spec.inDim),
+                            groupSize: Int(spec.groupSize))
+                    }
                 }
             }
         }
@@ -220,32 +230,25 @@ public final class LayerPipeline {
                 context: context, config: config, kvCacheLength: kv.length + 1, layerIndex: layerIndex)
 
             if useGPUAttn {
-                // CPU-side: Q/K norm + RoPE + KV cache update + copy to GPU
-                // (FullAttention.forward handles norm+RoPE+cache internally,
-                //  but for GPU path we need to split: do norm+RoPE+cache on CPU,
-                //  then dispatch dot-product on GPU)
-                // For now, run full CPU attention then flag GPU for CMD2 o_proj input.
-                // TODO: Split FullAttention into prepare (CPU) + dispatch (GPU) for
-                //       optimal GPU utilization at long sequences.
                 attnOut.withUnsafeMutableBufferPointer { outBuf in
+                    guard let outBase = outBuf.baseAddress else { return }
                     FullAttention.forward(
                         qProjOut: &qProjOut, kOut: &kOut, vOut: &vOut,
                         kvCache: &kv, position: position, config: config,
                         qNormW: weights.qNormW, kNormW: weights.kNormW,
-                        output: outBuf.baseAddress!)
+                        output: outBase)
                 }
-                // Copy result to buf_attn_out for CMD2 to use
                 memcpy(context.attention.output.contents(), &attnOut,
                        config.numAttentionHeads * config.headDim * MemoryLayout<Float>.size)
                 gpuFullAttnUsed = true
             } else {
-                // CPU attention (short sequences or no GPU support)
                 attnOut.withUnsafeMutableBufferPointer { outBuf in
+                    guard let outBase = outBuf.baseAddress else { return }
                     FullAttention.forward(
                         qProjOut: &qProjOut, kOut: &kOut, vOut: &vOut,
                         kvCache: &kv, position: position, config: config,
                         qNormW: weights.qNormW, kNormW: weights.kNormW,
-                        output: outBuf.baseAddress!)
+                        output: outBase)
                 }
             }
             kvCache = kv
@@ -264,17 +267,22 @@ public final class LayerPipeline {
             memcpy(&alphaOut, context.projections.batchSlots[3].contents(), numVHeads * MemoryLayout<Float>.size)
 
             attnOut.withUnsafeMutableBufferPointer { outBuf in
+                guard let outBase = outBuf.baseAddress else { return }
                 qkvOut.withUnsafeBufferPointer { qkvBuf in
+                    guard let qkvBase = qkvBuf.baseAddress else { return }
                     zOut.withUnsafeBufferPointer { zBuf in
+                        guard let zBase = zBuf.baseAddress else { return }
                         betaOut.withUnsafeBufferPointer { betaBuf in
+                            guard let betaBase = betaBuf.baseAddress else { return }
                             alphaOut.withUnsafeBufferPointer { alphaBuf in
+                                guard let alphaBase = alphaBuf.baseAddress else { return }
                                 LinearAttention.forward(
-                                    qkvOut: qkvBuf.baseAddress!, zOut: zBuf.baseAddress!,
-                                    betaOut: betaBuf.baseAddress!, alphaOut: alphaBuf.baseAddress!,
+                                    qkvOut: qkvBase, zOut: zBase,
+                                    betaOut: betaBase, alphaOut: alphaBase,
                                     state: &ls, config: config,
                                     conv1dW: weights.conv1dW, aLog: weights.aLog,
                                     dtBias: weights.dtBias, gatedNormW: weights.gatedNormW,
-                                    output: outBuf.baseAddress!)
+                                    output: outBase)
                             }
                         }
                     }
@@ -297,30 +305,46 @@ public final class LayerPipeline {
             && weights.gateW != nil
 
         if useGPUCmd2 {
-            // GPU-fused CMD2: all 8+ encoders in one command buffer
-            let attnOutPtr: UnsafePointer<Float>
             if gpuFullAttnUsed {
-                // GPU full attention: o_proj reads from buf_attn_out
-                attnOutPtr = UnsafePointer(context.attention.output.contents()
+                let attnOutPtr = UnsafePointer(context.attention.output.contents()
                     .assumingMemoryBound(to: Float.self))
+                if let result = CMD2Encoder.encode(
+                    context: context, config: config, weights: weights,
+                    attnOut: attnOutPtr, residual: &residualScratch,
+                    isFull: isFull, oProjInDim: oProjInDim
+                ) {
+                    memcpy(hidden, result.hMid, hiddenBytes)
+                    memcpy(&hPostScratch, result.hPost, hiddenBytes)
+                    gateScoresScratch = result.gateScores
+                    sharedGateScore = result.sharedGateScore
+                }
             } else if gpuLinearAttnRan {
-                // GPU linear attention: output is in batchSlots[6]
-                attnOutPtr = UnsafePointer(context.projections.batchSlots[6].contents()
+                let attnOutPtr = UnsafePointer(context.projections.batchSlots[6].contents()
                     .assumingMemoryBound(to: Float.self))
+                if let result = CMD2Encoder.encode(
+                    context: context, config: config, weights: weights,
+                    attnOut: attnOutPtr, residual: &residualScratch,
+                    isFull: isFull, oProjInDim: oProjInDim
+                ) {
+                    memcpy(hidden, result.hMid, hiddenBytes)
+                    memcpy(&hPostScratch, result.hPost, hiddenBytes)
+                    gateScoresScratch = result.gateScores
+                    sharedGateScore = result.sharedGateScore
+                }
             } else {
-                // CPU attention: output is in local attnOut array
-                attnOutPtr = attnOut.withUnsafeBufferPointer { $0.baseAddress! }
-            }
-
-            if let result = CMD2Encoder.encode(
-                context: context, config: config, weights: weights,
-                attnOut: attnOutPtr, residual: &residualScratch,
-                isFull: isFull, oProjInDim: oProjInDim
-            ) {
-                memcpy(hidden, result.hMid, hiddenBytes)
-                memcpy(&hPostScratch, result.hPost, hiddenBytes)
-                gateScoresScratch = result.gateScores
-                sharedGateScore = result.sharedGateScore
+                attnOut.withUnsafeBufferPointer { attnBuf in
+                    guard let attnOutPtr = attnBuf.baseAddress else { return }
+                    if let result = CMD2Encoder.encode(
+                        context: context, config: config, weights: weights,
+                        attnOut: attnOutPtr, residual: &residualScratch,
+                        isFull: isFull, oProjInDim: oProjInDim
+                    ) {
+                        memcpy(hidden, result.hMid, hiddenBytes)
+                        memcpy(&hPostScratch, result.hPost, hiddenBytes)
+                        gateScoresScratch = result.gateScores
+                        sharedGateScore = result.sharedGateScore
+                    }
+                }
             }
         } else {
             // CPU fallback for CMD2
@@ -331,9 +355,10 @@ public final class LayerPipeline {
 
             if let w = oProjW, let s = oProjS, let b = oProjB {
                 attnOut.withUnsafeBufferPointer { attnBuf in
+                    guard let attnBase = attnBuf.baseAddress else { return }
                     Embedding.cpuDequantMatvec(
                         W: UnsafePointer(OpaquePointer(w)), scales: s, biases: b,
-                        input: attnBuf.baseAddress!, output: &attnProjected,
+                        input: attnBase, output: &attnProjected,
                         outDim: hiddenDim, inDim: oProjInDim, groupSize: config.groupSize)
                 }
             }
@@ -345,18 +370,20 @@ public final class LayerPipeline {
             for i in 0..<gateScoresScratch.count { gateScoresScratch[i] = 0 }
             if let gw = weights.gateW, let gs = weights.gateS, let gb = weights.gateB {
                 hPostScratch.withUnsafeBufferPointer { hBuf in
+                    guard let hBase = hBuf.baseAddress else { return }
                     Embedding.cpuDequantMatvec(
                         W: UnsafePointer(OpaquePointer(gw)), scales: gs, biases: gb,
-                        input: hBuf.baseAddress!, output: &gateScoresScratch,
+                        input: hBase, output: &gateScoresScratch,
                         outDim: config.numExperts, inDim: hiddenDim, groupSize: config.groupSize)
                 }
             }
             if let segW = weights.sharedExpertGateW, let segS = weights.sharedExpertGateS,
                let segB = weights.sharedExpertGateB {
                 hPostScratch.withUnsafeBufferPointer { hBuf in
+                    guard let hBase = hBuf.baseAddress else { return }
                     Embedding.cpuDequantMatvec(
                         W: UnsafePointer(OpaquePointer(segW)), scales: segS, biases: segB,
-                        input: hBuf.baseAddress!, output: &sharedGateScore,
+                        input: hBase, output: &sharedGateScore,
                         outDim: 1, inDim: hiddenDim, groupSize: config.groupSize)
                 }
             }
@@ -387,9 +414,10 @@ public final class LayerPipeline {
         if let sgW = weights.sharedGateW, let sgS = weights.sharedGateS, let sgB = weights.sharedGateB {
             var sharedGate = [Float](repeating: 0, count: config.sharedIntermediate)
             hPostScratch.withUnsafeBufferPointer { hBuf in
+                guard let hBase = hBuf.baseAddress else { return }
                 Embedding.cpuDequantMatvec(
                     W: UnsafePointer(OpaquePointer(sgW)), scales: sgS, biases: sgB,
-                    input: hBuf.baseAddress!, output: &sharedGate,
+                    input: hBase, output: &sharedGate,
                     outDim: config.sharedIntermediate, inDim: hiddenDim, groupSize: config.groupSize
                 )
             }
@@ -399,9 +427,10 @@ public final class LayerPipeline {
         if let suW = weights.sharedUpW, let suS = weights.sharedUpS, let suB = weights.sharedUpB {
             var sharedUp = [Float](repeating: 0, count: config.sharedIntermediate)
             hPostScratch.withUnsafeBufferPointer { hBuf in
+                guard let hBase = hBuf.baseAddress else { return }
                 Embedding.cpuDequantMatvec(
                     W: UnsafePointer(OpaquePointer(suW)), scales: suS, biases: suB,
-                    input: hBuf.baseAddress!, output: &sharedUp,
+                    input: hBase, output: &sharedUp,
                     outDim: config.sharedIntermediate, inDim: hiddenDim, groupSize: config.groupSize
                 )
             }
@@ -413,7 +442,9 @@ public final class LayerPipeline {
         memcpy(context.combine.hMid.contents(), hidden, hiddenBytes)
 
         // Encode CMD3: expert forwards + shared SwiGLU + shared down + combine
-        let cmdExperts = context.queue.makeCommandBuffer()!
+        guard let cmdExperts = context.queue.makeCommandBuffer() else {
+            preconditionFailure("Metal command buffer allocation failed for experts")
+        }
 
         let expertMetalBuffers = (0..<actualK).map { context.experts.dataA[$0].metalBuffer }
         ExpertEncoder.encode(
@@ -483,15 +514,15 @@ public final class LayerPipeline {
 
     // MARK: - Helpers
 
-    /// Dummy CPU pointer for BatchMatvecSpec (we read results from batchSlots.contents() instead).
-    private nonisolated(unsafe) static var dummyCPU: Float = 0
+    // Justification: dummyCPU is only used as a placeholder address for BatchMatvecSpec.outputCPU; never read or written concurrently.
+    private nonisolated(unsafe) static let dummyCPU: UnsafeMutablePointer<Float> = .allocate(capacity: 1)
 
     /// Builds attention projection BatchMatvecSpecs for CMD1.
     ///
     /// Results go into GPU batch output slots. Phase 2 reads from `batchSlots[n].contents()`.
     /// The `outputCPU` field is a dummy — not used in this pipeline.
     private func buildAttentionSpecs(weights: LayerWeightPointers, isFull: Bool) -> [BatchMatvecSpec] {
-        let dummy = withUnsafeMutablePointer(to: &LayerPipeline.dummyCPU) { $0 }
+        let dummy = LayerPipeline.dummyCPU
         var specs: [BatchMatvecSpec] = []
         let inDim = UInt32(config.hiddenDim)
         let gs = UInt32(config.groupSize)
@@ -552,7 +583,8 @@ public final class LayerPipeline {
         // Read shared expert result
         let sharedResult = context.experts.sharedOutput.contents()
             .assumingMemoryBound(to: Float.self)
-        let sharedWeight = 1.0 / (1.0 + expf(-deferred.sharedGateScore))  // sigmoid
+        let expVal = 1.0 + expf(-deferred.sharedGateScore)
+        let sharedWeight = expVal > 0 ? 1.0 / expVal : 0.5
 
         // Final combine: hidden = h_mid + moe_out + shared_out * sigmoid(gate)
         for i in 0..<hiddenDim {
@@ -565,43 +597,69 @@ public final class LayerPipeline {
 ///
 /// Matches the `LayerTimingAccum` struct from `infer.m:146-160`.
 public struct LayerTiming {
+    /// Accumulated time waiting for deferred GPU completion (ms).
     public var deferredWait: Double = 0
+    /// Accumulated CPU finalization time after deferred GPU (ms).
     public var deferredCPU: Double = 0
+    /// Accumulated input RMS norm time (ms).
     public var inputNorm: Double = 0
+    /// Accumulated CMD1 submission time (ms).
     public var cmd1Submit: Double = 0
+    /// Accumulated CMD1 GPU wait time (ms).
     public var cmd1Wait: Double = 0
+    /// Accumulated CPU attention compute time (ms).
     public var cpuAttention: Double = 0
+    /// Accumulated CMD2 encoding time (ms).
     public var cmd2Encode: Double = 0
+    /// Accumulated CMD2 GPU wait time (ms).
     public var cmd2Wait: Double = 0
+    /// Accumulated CPU routing (softmax + topK) time (ms).
     public var routingCPU: Double = 0
+    /// Accumulated expert I/O (pread) time (ms).
     public var expertIO: Double = 0
+    /// Accumulated CMD3 encoding time (ms).
     public var cmd3Encode: Double = 0
+    /// Accumulated total per-layer time (ms).
     public var totalLayer: Double = 0
+    /// Number of layers timed.
     public var layerCount: Int = 0
 
+    /// Resets all accumulators.
     public mutating func reset() {
         self = LayerTiming()
     }
 
-    /// Prints a summary matching the original's `timing_print()` format.
-    public func printSummary() {
-        guard layerCount > 0 else { return }
+    /// Returns a formatted summary matching the original's `timing_print()` format.
+    public func formatSummary() -> String {
+        guard layerCount > 0 else { return "" }
         let n = Double(layerCount)
-        print("""
+        func fmt(_ v: Double) -> String {
+            let avg = v / n
+            return String(repeating: " ", count: max(0, 6 - "\(Int(avg))".count))
+                + "\((avg * 1000).rounded() / 1000)"
+        }
+        return """
 
         [timing] Per-layer breakdown (avg of \(layerCount) layers, ms):
-          deferred_wait:  \(String(format: "%6.3f", deferredWait / n))
-          deferred_cpu:   \(String(format: "%6.3f", deferredCPU / n))
-          input_norm:     \(String(format: "%6.3f", inputNorm / n))
-          cmd1_submit:    \(String(format: "%6.3f", cmd1Submit / n))
-          cmd1_wait:      \(String(format: "%6.3f", cmd1Wait / n))
-          cpu_attn:       \(String(format: "%6.3f", cpuAttention / n))
-          cmd2_encode:    \(String(format: "%6.3f", cmd2Encode / n))
-          cmd2_wait:      \(String(format: "%6.3f", cmd2Wait / n))
-          routing_cpu:    \(String(format: "%6.3f", routingCPU / n))
-          expert_io:      \(String(format: "%6.3f", expertIO / n))
-          cmd3_encode:    \(String(format: "%6.3f", cmd3Encode / n))
-          total_layer:    \(String(format: "%6.3f", totalLayer / n))
-        """)
+          deferred_wait:  \(fmt(deferredWait))
+          deferred_cpu:   \(fmt(deferredCPU))
+          input_norm:     \(fmt(inputNorm))
+          cmd1_submit:    \(fmt(cmd1Submit))
+          cmd1_wait:      \(fmt(cmd1Wait))
+          cpu_attn:       \(fmt(cpuAttention))
+          cmd2_encode:    \(fmt(cmd2Encode))
+          cmd2_wait:      \(fmt(cmd2Wait))
+          routing_cpu:    \(fmt(routingCPU))
+          expert_io:      \(fmt(expertIO))
+          cmd3_encode:    \(fmt(cmd3Encode))
+          total_layer:    \(fmt(totalLayer))
+        """
+    }
+
+    /// Prints a timing summary to standard output.
+    public func printSummary() {
+        let summary = formatSummary()
+        guard !summary.isEmpty else { return }
+        pipelineLogger.info("\(summary, privacy: .public)")
     }
 }

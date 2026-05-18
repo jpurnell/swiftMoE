@@ -44,6 +44,7 @@ public final class BPETokenizer {
     public init(path: String) throws {
         buildByteUnicodeTable()
 
+        // silent: file-not-found is converted to a FlashMoEError below
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             throw FlashMoEError.fileNotFound(path: path)
         }
@@ -54,14 +55,17 @@ public final class BPETokenizer {
             guard offset + 4 <= data.count else {
                 throw FlashMoEError.manifestParseFailed(reason: "Unexpected EOF")
             }
-            let v = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) }
+            let v = UInt32(data[offset])
+                | (UInt32(data[offset+1]) << 8)
+                | (UInt32(data[offset+2]) << 16)
+                | (UInt32(data[offset+3]) << 24)
             offset += 4; return v
         }
         func readU16() throws -> UInt16 {
             guard offset + 2 <= data.count else {
                 throw FlashMoEError.manifestParseFailed(reason: "Unexpected EOF")
             }
-            let v = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self) }
+            let v = UInt16(data[offset]) | (UInt16(data[offset+1]) << 8)
             offset += 2; return v
         }
         func readBytes(_ n: Int) throws -> [UInt8] {

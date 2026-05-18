@@ -16,19 +16,30 @@ public struct ModelConfig: Sendable {
 
     // MARK: - Core Dimensions
 
+    /// Model hidden dimension (e.g. 4096 for Qwen3.5-397B).
     public let hiddenDim: Int
+    /// Total number of transformer layers.
     public let numLayers: Int
+    /// Number of query attention heads.
     public let numAttentionHeads: Int
+    /// Number of key-value attention heads (grouped query attention).
     public let numKVHeads: Int
+    /// Dimension per attention head.
     public let headDim: Int
+    /// Vocabulary size for the tokenizer.
     public let vocabSize: Int
+    /// Epsilon for RMS normalization layers.
     public let rmsNormEps: Float
 
     // MARK: - Expert Configuration
 
+    /// Total number of experts per MoE layer.
     public let numExperts: Int
+    /// Number of experts activated per token (top-K).
     public let numExpertsPerToken: Int
+    /// Intermediate dimension for routed expert MLPs.
     public let moeIntermediate: Int
+    /// Intermediate dimension for the shared (always-active) expert.
     public let sharedIntermediate: Int
 
     // MARK: - Expert Binary Layout
@@ -40,40 +51,63 @@ public struct ModelConfig: Sendable {
 
     // MARK: - 2-Bit Expert Offsets
 
+    /// Byte offset to gate projection weights in 2-bit expert binary.
     public let gateWeightsOffset2Bit: Int
+    /// Byte offset to gate projection scales in 2-bit expert binary.
     public let gateScalesOffset2Bit: Int
+    /// Byte offset to gate projection biases in 2-bit expert binary.
     public let gateBiasesOffset2Bit: Int
+    /// Byte offset to up projection weights in 2-bit expert binary.
     public let upWeightsOffset2Bit: Int
+    /// Byte offset to up projection scales in 2-bit expert binary.
     public let upScalesOffset2Bit: Int
+    /// Byte offset to up projection biases in 2-bit expert binary.
     public let upBiasesOffset2Bit: Int
+    /// Byte offset to down projection weights in 2-bit expert binary.
     public let downWeightsOffset2Bit: Int
+    /// Byte offset to down projection scales in 2-bit expert binary.
     public let downScalesOffset2Bit: Int
+    /// Byte offset to down projection biases in 2-bit expert binary.
     public let downBiasesOffset2Bit: Int
 
     // MARK: - Quantization
 
+    /// Quantization group size (elements per scale/bias pair).
     public let groupSize: Int
+    /// Quantization bit width (4 or 2).
     public let bits: Int
 
     // MARK: - Attention
 
+    /// Interval between full attention layers (e.g. every 4th layer).
     public let fullAttentionInterval: Int
+    /// RoPE base frequency for positional encoding.
     public let ropeTheta: Float
+    /// Fraction of head dimension that uses rotary embedding.
     public let partialRotary: Float
 
     // MARK: - Linear Attention (GatedDeltaNet)
 
+    /// Number of value heads for linear (GatedDeltaNet) attention.
     public let linearNumVHeads: Int
+    /// Number of key heads for linear (GatedDeltaNet) attention.
     public let linearNumKHeads: Int
+    /// Key dimension per head for linear attention.
     public let linearKeyDim: Int
+    /// Value dimension per head for linear attention.
     public let linearValueDim: Int
+    /// Conv1d kernel size for linear attention input gating.
     public let convKernelSize: Int
 
     // MARK: - Special Tokens
 
+    /// First end-of-sequence token ID.
     public let eosToken1: Int
+    /// Second end-of-sequence token ID.
     public let eosToken2: Int
+    /// Think-start special token ID.
     public let thinkStartToken: Int
+    /// Think-end special token ID.
     public let thinkEndToken: Int
 
     // MARK: - Hardware Constants (not model-specific)

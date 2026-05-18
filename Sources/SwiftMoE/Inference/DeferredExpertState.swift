@@ -48,6 +48,7 @@ public struct DeferredExpertState {
     /// Pointer to hidden state (for writing the final combined result).
     public var hiddenPointer: UnsafeMutablePointer<Float>?
 
+    /// Creates a new inactive DeferredExpertState.
     public init() {}
 
     /// Activates the deferred state with the current layer's expert results.
