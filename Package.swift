@@ -54,10 +54,7 @@ let package = Package(
 
         .testTarget(
             name: "SwiftMoETests",
-            dependencies: ["SwiftMoE"],
-            resources: [
-                .copy("Fixtures")
-            ]
+            dependencies: ["SwiftMoE"]
         ),
     ]
 )
