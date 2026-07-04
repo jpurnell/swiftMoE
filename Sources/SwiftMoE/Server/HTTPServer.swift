@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(os)
 import os
+#endif
 
 private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 

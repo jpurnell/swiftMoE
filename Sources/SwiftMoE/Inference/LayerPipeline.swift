@@ -1,6 +1,8 @@
 import Metal
 import Foundation
+#if canImport(os)
 import os
+#endif
 
 private let pipelineLogger = Logger(subsystem: "com.swiftmoe", category: "pipeline")
 
