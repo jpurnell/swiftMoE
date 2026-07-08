@@ -1,4 +1,5 @@
 // swift-tools-version: 6.2
+// legibility:description: A Swift inference engine for Mixture-of-Experts language models on Apple Silicon, based on the Flash-MoE paper.
 
 import PackageDescription
 
