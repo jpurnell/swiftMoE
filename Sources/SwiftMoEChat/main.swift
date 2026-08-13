@@ -103,7 +103,12 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
             return
         }
 
-        for line in text.components(separatedBy: "\n") {
+        // Split on the Unicode newline property rather than the "\n" literal.
+        // components(separatedBy:) matches by scalar, so it finds the \n inside a
+        // \r\n but leaves the \r on the end of every line — and SSE is specified
+        // with CRLF. A trailing \r makes `payload == "[DONE]"` never match, so the
+        // stream would never terminate on a spec-compliant server.
+        for line in text.split(whereSeparator: \.isNewline) {
             guard line.hasPrefix("data: ") else { continue }
             let payload = String(line.dropFirst(6))
 

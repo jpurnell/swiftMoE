@@ -32,12 +32,21 @@ private let pipelineLogger = Logger(subsystem: "com.swiftmoe", category: "pipeli
 /// ```
 ///
 /// ## Usage
+///
+/// The shape of a decode step. Driving this for real needs a loaded model, Metal
+/// shaders on disk and an open expert file descriptor, so it is marked illustrative
+/// rather than padded out into something that compiles but still could not run.
+///
+/// <!-- docs:illustrative -->
 /// ```swift
-/// let pipeline = LayerPipeline(context: metalCtx)
-/// for layer in 0..<60 {
-///     pipeline.forward(layerIndex: layer, hidden: &hidden, ...)
+/// let pipeline = LayerPipeline(context: metalCtx, config: config)
+/// for layer in 0..<config.numLayers {
+///     pipeline.forward(layerIndex: layer, hidden: hidden, weights: weights,
+///                      kvCache: &kvCache, linearState: &linearState,
+///                      position: position, K: topK, expertFD: expertFD,
+///                      use2Bit: false, layerWeights: layerWeights)
 /// }
-/// pipeline.completeDeferredExperts()  // finalize last layer
+/// pipeline.completeDeferredExperts(hidden: hidden)  // finalize last layer
 /// ```
 public final class LayerPipeline {
 

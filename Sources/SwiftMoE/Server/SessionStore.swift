@@ -110,7 +110,10 @@ public final class SessionStore {
             return []
         }
 
-        return text.split(separator: "\n").compactMap { line in
+        // Split on the Unicode newline property, not the "\n" literal. "\r\n" is a
+        // single Character in Swift, so a literal "\n" never matches it and a
+        // CRLF-written session file comes back as one element holding the whole document.
+        return text.split(whereSeparator: \.isNewline).compactMap { line in
             guard let lineData = String(line).data(using: .utf8) else { return nil }
             do {
                 guard let json = try JSONSerialization.jsonObject(with: lineData) as? [String: String],
