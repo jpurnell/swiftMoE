@@ -20,9 +20,7 @@ enum SyntheticFixtures {
     /// Only generates tensors for layer 0 + embedding + final norm + lm_head.
     /// Expert files are sized for 4-bit experts with K=4 experts each.
     static func create(config: ModelConfig = .qwen397B, numLayers: Int = 1, numExperts: Int = 4) throws -> FixturePaths {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("flash_moe_test_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let tempDir = try TestPaths.makeScratchDirectory(prefix: "flash_moe_test")
 
         let hiddenDim = config.hiddenDim  // 4096
         let groupSize = config.groupSize  // 64
@@ -180,6 +178,6 @@ enum SyntheticFixtures {
 
     /// Removes all synthetic fixture files.
     static func cleanup(_ paths: FixturePaths) {
-        try? FileManager.default.removeItem(atPath: paths.tempDir) // silent: best-effort test cleanup
+        TestPaths.removeScratchDirectory(paths.tempDir)
     }
 }

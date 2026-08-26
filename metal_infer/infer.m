@@ -4142,6 +4142,8 @@ static void fused_layer_forward(
                 [enc setBuffer:g_metal->wf_buf             offset:dt_bias_off atIndex:3]; // dt_bias (bf16)
                 [enc setBuffer:g_metal->buf_delta_g_decay  offset:0          atIndex:4]; // g_decay output
                 [enc setBuffer:g_metal->buf_delta_beta     offset:0          atIndex:5]; // beta_gate output
+                uint32_t n_v_heads = LINEAR_NUM_V_HEADS;
+                [enc setBytes:&n_v_heads length:sizeof(n_v_heads) atIndex:6];
                 [enc dispatchThreadgroups:MTLSizeMake(1, 1, 1)
                     threadsPerThreadgroup:MTLSizeMake(LINEAR_NUM_V_HEADS, 1, 1)];
                 [enc endEncoding];
@@ -4291,6 +4293,8 @@ static void fused_layer_forward(
                     [enc setBuffer:g_metal->wf_buf             offset:dt_bias_off atIndex:3];
                     [enc setBuffer:g_metal->buf_delta_g_decay  offset:0          atIndex:4];
                     [enc setBuffer:g_metal->buf_delta_beta     offset:0          atIndex:5];
+                    uint32_t n_v_heads = LINEAR_NUM_V_HEADS;
+                    [enc setBytes:&n_v_heads length:sizeof(n_v_heads) atIndex:6];
                     [enc dispatchThreadgroups:MTLSizeMake(1, 1, 1)
                         threadsPerThreadgroup:MTLSizeMake(LINEAR_NUM_V_HEADS, 1, 1)];
                     [enc endEncoding];

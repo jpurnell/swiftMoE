@@ -181,10 +181,17 @@ public enum ExpertEncoder {
         enc.setBytes(&gs, length: 4, index: 7)
 
         if useV3 {
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((outDim + 7) / 8), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1)
-            )
+            // v3 assigns one SIMD group (32 lanes) per output row, 8 rows per
+            // 256-thread threadgroup. Dispatching outDim * 32 threads asks for
+            // exactly the lanes the rows need: a tail threadgroup is still a
+            // whole number of SIMD groups, so `simd_sum` keeps its full width,
+            // and the kernel strides its cooperative load by the actual
+            // threadgroup size. Rounding to whole threadgroups instead would
+            // launch SIMD groups for rows that do not exist.
+            let lanesPerRow = 32
+            enc.dispatchExactly(threadCount: Int(outDim) * lanesPerRow,
+                                threadsPerThreadgroup: 256,
+                                device: context.device)
         } else {
             enc.dispatchThreadgroups(
                 MTLSize(width: Int(outDim), height: 1, depth: 1),
@@ -235,10 +242,8 @@ public enum ExpertEncoder {
             var kVal = UInt32(actualK)
             enc.setBytes(&dim, length: 4, index: 12)
             enc.setBytes(&kVal, length: 4, index: 13)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((dim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1)
-            )
+            enc.dispatchExactly(threadCount: Int(dim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
 
@@ -268,10 +273,8 @@ public enum ExpertEncoder {
             enc.setBuffer(context.projections.input, offset: 0, index: 3)
             enc.setBytes(&dim, length: 4, index: 4)
             enc.setBytes(&eps, length: 4, index: 5)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((dim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1)
-            )
+            enc.dispatchExactly(threadCount: Int(dim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
     }

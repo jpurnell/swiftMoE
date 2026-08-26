@@ -78,6 +78,6 @@ public struct DeferredExpertState {
     /// Waits for the deferred GPU command buffer to complete.
     public func waitForGPU() {
         guard isActive, let cmd = commandBuffer else { return }
-        cmd.waitUntilCompleted()
+        cmd.waitUntilCompletedChecked("deferred expert forward (layer \(layerIndex))")
     }
 }

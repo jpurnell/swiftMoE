@@ -72,9 +72,8 @@ public enum CMD2Encoder {
             enc.setBuffer(context.projections.output, offset: 0, index: 1)
             enc.setBuffer(context.combine.hMid, offset: 0, index: 2)
             enc.setBytes(&dim, length: 4, index: 3)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((dim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.dispatchExactly(threadCount: Int(dim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
 
@@ -103,9 +102,8 @@ public enum CMD2Encoder {
             enc.setBuffer(context.projections.input, offset: 0, index: 3)
             enc.setBytes(&dim, length: 4, index: 4)
             enc.setBytes(&eps, length: 4, index: 5)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((dim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.dispatchExactly(threadCount: Int(dim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
 
@@ -154,7 +152,7 @@ public enum CMD2Encoder {
 
         // ---- Single commit+wait for all encoders ----
         cmd.commit()
-        cmd.waitUntilCompleted()
+        cmd.waitUntilCompletedChecked("CMD2 o_proj + norm + routing")
 
         // Read back results
         var hMid = [Float](repeating: 0, count: hiddenDim)

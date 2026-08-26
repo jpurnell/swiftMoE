@@ -39,11 +39,10 @@ struct TokenGeneratorTests {
 
     @Test("Initialization creates correct number of caches and states")
     func initialization() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
         let config = ModelConfig.qwen397B
-        let ctx = try MetalContext(config: config, shaderPath: path, use2Bit: false)
+        let ctx = try MetalContext(config: config, shaderPath: shaderURL.path, use2Bit: false)
         let gen = TokenGenerator(context: ctx, config: config)
 
         #expect(gen.kvCaches.count == 15, "Should have 15 KV caches (one per full attention layer)")

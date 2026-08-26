@@ -54,7 +54,7 @@ SwiftMoE/
     SwiftMoEServer/   Executable: OpenAI-compatible HTTP server
     SwiftMoEChat/     Executable: Interactive TUI chat client
   Tests/
-    SwiftMoETests/    82 tests across 21 suites (0.5s)
+    SwiftMoETests/    84 tests across 22 suites (0.5s)
   metal_infer/        Original Obj-C/Metal reference implementation
 ```
 

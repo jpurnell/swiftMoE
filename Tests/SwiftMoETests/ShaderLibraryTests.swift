@@ -7,26 +7,12 @@ import Metal
 @Suite("ShaderLibrary")
 struct ShaderLibraryTests {
 
-    /// Path to the real shaders.metal file in the repo.
-    static var shaderPath: String {
-        // Walk up from the test bundle to find metal_infer/shaders.metal
-        let candidates = [
-            "metal_infer/shaders.metal",
-            "shaders.metal",
-            "../metal_infer/shaders.metal",
-        ]
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        // Try from the repo root based on known structure
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // FlashMoETests/
-            .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // repo root
-        let fullPath = repoRoot.appendingPathComponent("metal_infer/shaders.metal").path
-        return fullPath
+    /// The real `shaders.metal` in the repo, or nil when it isn't checked out.
+    ///
+    /// Resolved against the repo root derived from `#filePath` — not the process
+    /// working directory — so the result does not depend on where tests are run.
+    static var shaderURL: URL? {
+        TestPaths.existingRepoFile("metal_infer/shaders.metal")
     }
 
     @Test("Compiles all required pipeline states from shaders.metal")
@@ -35,13 +21,10 @@ struct ShaderLibraryTests {
             throw FlashMoEError.metalUnavailable
         }
 
-        let path = Self.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else {
-            // Skip test if shader file isn't available (CI without repo checkout)
-            return
-        }
+        // Skip test if shader file isn't available (CI without repo checkout)
+        guard let shaderURL = Self.shaderURL else { return }
 
-        let library = try ShaderLibrary(device: device, shaderPath: path)
+        let library = try ShaderLibrary(device: device, shaderPath: shaderURL.path)
 
         // Required pipelines — verify they compiled with correct thread config
         #expect(library.matvecV3.maxTotalThreadsPerThreadgroup > 0)
@@ -58,10 +41,9 @@ struct ShaderLibraryTests {
             throw FlashMoEError.metalUnavailable
         }
 
-        let path = Self.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = Self.shaderURL else { return }
 
-        let library = try ShaderLibrary(device: device, shaderPath: path)
+        let library = try ShaderLibrary(device: device, shaderPath: shaderURL.path)
 
         // Optional but expected on M-series hardware
         let deltaNet = try #require(library.deltaNetStep, "delta_net_step should compile on Apple Silicon")

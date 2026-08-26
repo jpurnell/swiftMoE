@@ -21,7 +21,7 @@ struct IntegrationTests {
 
         // Weight file should exist and be non-empty
         let weightsData = try #require(
-            FileManager.default.contents(atPath: fixtures.weightsPath),
+            TestPaths.contents(of: fixtures.weightsPath, within: TestPaths.scratchRoot),
             "Weight file should exist"
         )
         #expect(!weightsData.isEmpty, "Weight file should be non-empty")
@@ -43,7 +43,8 @@ struct IntegrationTests {
         // Expert files should exist
         #expect(fixtures.expertPaths.count == config.numLayers)
         for path in fixtures.expertPaths {
-            #expect(FileManager.default.fileExists(atPath: path), "Expert file should exist: \(path)")
+            #expect(TestPaths.fileExists(path, within: TestPaths.scratchRoot),
+                    "Expert file should exist: \(path)")
         }
     }
 
@@ -173,10 +174,9 @@ struct IntegrationTests {
         )
         defer { SyntheticFixtures.cleanup(fixtures) }
 
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        let ctx = try MetalContext(config: config, shaderPath: path, use2Bit: false)
+        let ctx = try MetalContext(config: config, shaderPath: shaderURL.path, use2Bit: false)
         let wf = try WeightFile(weightsPath: fixtures.weightsPath, manifestPath: fixtures.manifestPath)
         let layerWeights = LayerWeightCacheBuilder.build(from: wf, config: config)
 

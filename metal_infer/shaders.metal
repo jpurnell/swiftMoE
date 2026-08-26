@@ -258,7 +258,8 @@ kernel void dequant_matvec_4bit_v3(
     constant uint&         in_dim     [[buffer(6)]],
     constant uint&         group_size [[buffer(7)]],
     uint tgid   [[threadgroup_position_in_grid]],     // which tile of rows
-    uint lid    [[thread_position_in_threadgroup]],    // 0..255
+    uint lid    [[thread_position_in_threadgroup]],    // 0..tg_size-1
+    uint tg_size [[threads_per_threadgroup]],          // 256, or fewer in a partial tail group
     uint simd_lane  [[thread_index_in_simdgroup]],    // 0..31
     uint simd_group [[simdgroup_index_in_threadgroup]] // 0..7
 ) {
@@ -273,11 +274,13 @@ kernel void dequant_matvec_4bit_v3(
     // This is well within the 32KB threadgroup memory limit on M3
     threadgroup float x_shared[4096];
 
-    // Cooperative load: 256 threads load 4096 floats (16 per thread)
+    // Cooperative load: the whole threadgroup loads in_dim floats between them.
     // ALL threads must participate in this load + barrier, even if their
     // row is out of bounds. Early return before the barrier causes only
     // partial loading of x_shared, corrupting results for valid rows.
-    for (uint i = lid; i < in_dim; i += 256) {
+    // Striding by the actual threadgroup size rather than a hardcoded 256 keeps
+    // the load complete when the grid ends in a partially populated threadgroup.
+    for (uint i = lid; i < in_dim; i += tg_size) {
         x_shared[i] = x[i];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -686,8 +689,7 @@ kernel void swiglu_fused_vec4(
     constant uint&       dim  [[buffer(3)]],  // original dim (must be multiple of 4)
     uint tid [[thread_position_in_grid]]
 ) {
-    uint vec_dim = dim / 4;
-    if (tid >= vec_dim) return;
+    if (tid >= dim / 4) return;
 
     float4 g = gate[tid];
     float4 silu_g = g / (1.0f + exp(-g));
@@ -707,8 +709,7 @@ kernel void swiglu_fused_batched(
     constant uint&      K    [[buffer(4)]],
     uint tid [[thread_position_in_grid]]
 ) {
-    uint total = K * dim;
-    if (tid >= total) return;
+    if (tid >= K * dim) return;
 
     float g = gate[tid];
     float silu_g = g / (1.0f + exp(-g));
@@ -1192,8 +1193,11 @@ kernel void compute_decay_beta(
     device const uint16_t *dt_bias,  // [num_v_heads] bf16
     device float *g_decay,           // [num_v_heads] output
     device float *beta_gate,         // [num_v_heads] output
+    constant uint &num_v_heads [[buffer(6)]],  // element count, bounds every index below
     uint idx [[thread_position_in_grid]]
 ) {
+    if (idx >= num_v_heads) return;
+
     float a_val = alpha_out[idx];
     float dt_b = bf16_to_f32(dt_bias[idx]);
     float A_val = exp(A_log[idx]);

@@ -9,10 +9,9 @@ struct MetalContextTests {
 
     @Test("Initializes with device, queue, and all buffer groups")
     func initialization() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        let ctx = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
+        let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
         #expect(ctx.device.name.isEmpty == false, "Device should have a name")
         #expect(ctx.projections.input.length == 32768,
@@ -23,10 +22,9 @@ struct MetalContextTests {
 
     @Test("Weight buffer wrapping works with synthetic data")
     func setWeights() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        let ctx = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
+        let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
         #expect(ctx.weightBuffer == nil, "No weights set yet")
 
         // Allocate a page-aligned buffer to simulate mmap'd weights
@@ -43,11 +41,10 @@ struct MetalContextTests {
 
     @Test("2-bit mode uses smaller expert buffers")
     func twobitSizing() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        let ctx4 = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
-        let ctx2 = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: true)
+        let ctx4 = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
+        let ctx2 = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: true)
 
         #expect(ctx2.experts.dataA[0].size < ctx4.experts.dataA[0].size,
                 "2-bit should allocate smaller expert data buffers")
@@ -55,10 +52,9 @@ struct MetalContextTests {
 
     @Test("Reset linear attention state zeros buffers")
     func resetState() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        let ctx = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
+        let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
         // Write nonzero data to a delta state buffer
         if let firstState = ctx.linearAttention.deltaState.first {

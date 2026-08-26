@@ -83,9 +83,8 @@ public enum GPULinearAttention {
             enc.setBuffer(wfBuf, offset: convWOff, index: 2)
             enc.setBuffer(context.linearAttention.convOutput, offset: 0, index: 3)
             enc.setBytes(&convDim, length: 4, index: 4)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((convDim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.dispatchExactly(threadCount: Int(convDim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
 
@@ -117,6 +116,8 @@ public enum GPULinearAttention {
             enc.setBuffer(wfBuf, offset: dtBiasOff, index: 3)
             enc.setBuffer(context.linearAttention.deltaGDecay, offset: 0, index: 4)
             enc.setBuffer(context.linearAttention.deltaBeta, offset: 0, index: 5)
+            var vHeadCount = UInt32(numVHeads)
+            enc.setBytes(&vHeadCount, length: 4, index: 6)
             enc.dispatchThreadgroups(
                 MTLSize(width: 1, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: numVHeads, height: 1, depth: 1))

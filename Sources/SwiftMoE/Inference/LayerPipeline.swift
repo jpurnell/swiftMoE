@@ -164,7 +164,7 @@ public final class LayerPipeline {
                     weights: weights, linearLayerIndex: linearIdx)
             }
             cmd1.commit()
-            cmd1.waitUntilCompleted()
+            cmd1.waitUntilCompletedChecked("CMD1 attention projections (fast path)")
 
             // Now CMD3(N-1) is done. Read back hidden state.
             completeDeferredExperts(hidden: hidden)
@@ -199,7 +199,7 @@ public final class LayerPipeline {
                         weights: weights, linearLayerIndex: linearIdx)
                 }
                 cmd1.commit()
-                cmd1.waitUntilCompleted()
+                cmd1.waitUntilCompletedChecked("CMD1 attention projections")
             } else if !specs.isEmpty {
                 // CPU fallback
                 normedScratch.withUnsafeBufferPointer { normedBuf in
@@ -471,9 +471,8 @@ public final class LayerPipeline {
             enc.setBuffer(context.experts.sharedActivation, offset: 0, index: 2)
             var dim = UInt32(config.sharedIntermediate)
             enc.setBytes(&dim, length: 4, index: 3)
-            enc.dispatchThreadgroups(
-                MTLSize(width: Int((dim + 255) / 256), height: 1, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.dispatchExactly(threadCount: Int(dim), threadsPerThreadgroup: 256,
+                                    device: context.device)
             enc.endEncoding()
         }
 

@@ -16,8 +16,21 @@ struct BPETokenizerTests {
 
         var data = Data()
 
-        func appendU32(_ v: UInt32) { withUnsafeBytes(of: v) { data.append(contentsOf: $0) } }
-        func appendU16(_ v: UInt16) { withUnsafeBytes(of: v) { data.append(contentsOf: $0) } }
+        // Little-endian, written byte-by-byte to match the reader's on-disk format.
+        func appendU32(_ v: UInt32) {
+            data.append(contentsOf: [
+                UInt8(truncatingIfNeeded: v),
+                UInt8(truncatingIfNeeded: v >> 8),
+                UInt8(truncatingIfNeeded: v >> 16),
+                UInt8(truncatingIfNeeded: v >> 24),
+            ])
+        }
+        func appendU16(_ v: UInt16) {
+            data.append(contentsOf: [
+                UInt8(truncatingIfNeeded: v),
+                UInt8(truncatingIfNeeded: v >> 8),
+            ])
+        }
         func appendStr(_ s: String) {
             let bytes = Array(s.utf8)
             appendU16(UInt16(bytes.count))

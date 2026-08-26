@@ -23,6 +23,23 @@ private let logger = Logger(subsystem: "com.swiftmoe.chat", category: "main")
 private let allowedSchemes: Set<String> = ["http", "https"]
 private let allowedHosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
+// Wall-clock allowance for one completion request.
+//
+// `dataTask` delivers the whole SSE body at once, so the wait has to cover the
+// entire generation rather than just the first token. The engine sustains
+// ~4.4 tok/s; budgeting a conservative 1 tok/s floor plus a fixed startup
+// allowance keeps a slow-but-healthy run from being cut off, while still
+// bounding the wait so an unresponsive server cannot block the CLI forever.
+private let requestStartupAllowance: TimeInterval = 120
+private let secondsPerTokenFloor: TimeInterval = 1.0
+/// Grace period so URLSession's own timeout fires first and reports the reason.
+private let waitGracePeriod: TimeInterval = 5
+
+/// Wall-clock deadline for a completion of at most `maxTokens` tokens.
+func requestDeadline(maxTokens: Int) -> TimeInterval {
+    requestStartupAllowance + TimeInterval(max(0, maxTokens)) * secondsPerTokenFloor
+}
+
 struct ChatConfig {
     var serverURL: String = "http://localhost:8080"
     var sessionID: String?
@@ -82,7 +99,9 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
         return
     }
 
+    let deadline = requestDeadline(maxTokens: maxTokens)
     var request = URLRequest(url: requestURL)
+    request.timeoutInterval = deadline
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = jsonData
@@ -127,7 +146,13 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
     task.resume()
-    semaphore.wait()
+    if semaphore.wait(timeout: .now() + deadline + waitGracePeriod) == .timedOut {
+        // The server never completed the response. Cancel so the connection is
+        // torn down instead of leaking, and hand control back to the prompt.
+        task.cancel()
+        logger.error("Request exceeded its \(Int(deadline), privacy: .public)s deadline; cancelled.")
+        FileHandle.standardOutput.write(Data("\n[request timed out]\n".utf8))
+    }
 }
 
 func main() {

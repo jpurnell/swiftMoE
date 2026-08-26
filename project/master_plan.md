@@ -71,6 +71,8 @@ SwiftMoE/
 - [x] Chat TUI with session persistence
 - [x] Runtime ModelConfig with presets (.qwen397B, .tiny)
 - [x] Synthetic test fixtures (SyntheticFixtures + ModelConfig.tiny)
+- [x] GPU dispatch safety: every kernel bounds its thread id, every blocking wait checks
+      command-buffer status, elementwise dispatches are exact rather than rounded
 
 ### Remaining
 - [ ] Download Qwen3.5-397B weights and validate numerical equivalence
@@ -83,11 +85,13 @@ SwiftMoE/
 ## Quality Standards
 
 - Zero compiler warnings
-- 82 tests, all passing
+- Quality gate clean at 0 errors / 0 warnings across all 45 checkers, no overrides
+- 84 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-04-05
+**Last Updated:** 2026-08-25 — reconciled after driving the quality gate to 0/0 across
+all 45 checkers. Added GPU dispatch safety to Current Status; test count 82 → 84.

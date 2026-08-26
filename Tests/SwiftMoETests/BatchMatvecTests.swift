@@ -8,10 +8,9 @@ struct BatchMatvecTests {
 
     @Test("Encode and flush produces correct GPU matvec result")
     func encodeAndFlush() throws {
-        let path = ShaderLibraryTests.shaderPath
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
 
-        _ = try MetalContext(config: .qwen397B, shaderPath: path, use2Bit: false)
+        _ = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
         // Create a simple 4-element identity-like test:
         // 4-bit quantized weight where nibble=8, scale=0.125, bias=0 → dequantized weight = 1.0
@@ -21,12 +20,17 @@ struct BatchMatvecTests {
         // Skip GPU test for now — the shader expects real model-sized dimensions.
         // BatchMatvec encoding is validated end-to-end in Phase 4 with real weights.
 
-        // Verify the struct can be created
+        // Verify the struct can be created. The spec only records the pointers —
+        // nothing dereferences them here — but back them with real allocations so
+        // the test holds valid addresses rather than fabricated ones.
+        let scratch = UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 16)
+        defer { scratch.deallocate() }
+
         var outputBuf = [Float](repeating: 0, count: 4)
         let spec = BatchMatvecSpec(
-            weights: UnsafeRawPointer(bitPattern: 1)!,
-            scales: UnsafeRawPointer(bitPattern: 1)!,
-            biases: UnsafeRawPointer(bitPattern: 1)!,
+            weights: UnsafeRawPointer(scratch),
+            scales: UnsafeRawPointer(scratch),
+            biases: UnsafeRawPointer(scratch),
             outputCPU: &outputBuf,
             outDim: 4,
             inDim: 4096,
