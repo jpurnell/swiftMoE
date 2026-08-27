@@ -3,3 +3,8 @@ consistency:
   projectID: swiftMoE
   consistencyThreshold: 0.7
   defaultRiskTier: 2
+
+# Refuse to trust a gate binary older than this. A stale binary silently runs
+# old rules; without this pin nothing says so. Ratchet on each deploy that the
+# repo depends on. Warns on every run; fails only under --strict.
+minimumGateVersion: "2026-08-26"
