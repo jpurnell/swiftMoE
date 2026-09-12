@@ -6,9 +6,10 @@ import Metal
 @Suite("BatchMatvec")
 struct BatchMatvecTests {
 
-    @Test("Encode and flush produces correct GPU matvec result")
+    @Test("Encode and flush produces correct GPU matvec result",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func encodeAndFlush() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         _ = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 

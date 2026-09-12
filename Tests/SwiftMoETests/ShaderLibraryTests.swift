@@ -15,14 +15,22 @@ struct ShaderLibraryTests {
         TestPaths.existingRepoFile("metal_infer/shaders.metal")
     }
 
-    @Test("Compiles all required pipeline states from shaders.metal")
+    /// Whether the shader source is present, for `.enabled(if:)` traits.
+    ///
+    /// Every GPU test in this target is gated on this rather than opening with
+    /// `guard let shaderURL = ... else { return }`. The guard made a checkout
+    /// without `metal_infer/` report a green run of tests that had compiled
+    /// nothing; the trait records those tests as skipped instead.
+    static var shadersAvailable: Bool { shaderURL != nil }
+
+    @Test("Compiles all required pipeline states from shaders.metal",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func compilesRequiredPipelines() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw FlashMoEError.metalUnavailable
         }
 
-        // Skip test if shader file isn't available (CI without repo checkout)
-        guard let shaderURL = Self.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let library = try ShaderLibrary(device: device, shaderPath: shaderURL.path)
 
@@ -35,13 +43,14 @@ struct ShaderLibraryTests {
         #expect(library.moeCombineResidual.maxTotalThreadsPerThreadgroup > 0)
     }
 
-    @Test("Compiles optional delta-net pipelines")
+    @Test("Compiles optional delta-net pipelines",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func compilesDeltaNetPipelines() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw FlashMoEError.metalUnavailable
         }
 
-        guard let shaderURL = Self.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let library = try ShaderLibrary(device: device, shaderPath: shaderURL.path)
 

@@ -37,9 +37,10 @@ struct TokenGeneratorTests {
         #expect(TokenGenerator.linearAttentionIndex(layer: 4, config: config) == 3)  // layer 3 is full attn
     }
 
-    @Test("Initialization creates correct number of caches and states")
+    @Test("Initialization creates correct number of caches and states",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func initialization() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let config = ModelConfig.qwen397B
         let ctx = try MetalContext(config: config, shaderPath: shaderURL.path, use2Bit: false)

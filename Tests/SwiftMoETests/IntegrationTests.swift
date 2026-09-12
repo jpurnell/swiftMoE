@@ -166,7 +166,8 @@ struct IntegrationTests {
         #expect(abs(logits[config.vocabSize - 1]) < 1e-6)
     }
 
-    @Test("TokenGenerator.generate() runs end-to-end with tiny config")
+    @Test("TokenGenerator.generate() runs end-to-end with tiny config",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func generateEndToEnd() throws {
         let config = ModelConfig.tiny
         let fixtures = try SyntheticFixtures.create(
@@ -174,7 +175,7 @@ struct IntegrationTests {
         )
         defer { SyntheticFixtures.cleanup(fixtures) }
 
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let ctx = try MetalContext(config: config, shaderPath: shaderURL.path, use2Bit: false)
         let wf = try WeightFile(weightsPath: fixtures.weightsPath, manifestPath: fixtures.manifestPath)

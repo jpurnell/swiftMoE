@@ -7,9 +7,10 @@ import Metal
 @Suite("MetalContext")
 struct MetalContextTests {
 
-    @Test("Initializes with device, queue, and all buffer groups")
+    @Test("Initializes with device, queue, and all buffer groups",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func initialization() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
@@ -20,9 +21,10 @@ struct MetalContextTests {
         #expect(ctx.combine.residual.length == ModelConfig.qwen397B.hiddenDim * MemoryLayout<Float>.size)
     }
 
-    @Test("Weight buffer wrapping works with synthetic data")
+    @Test("Weight buffer wrapping works with synthetic data",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func setWeights() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
         #expect(ctx.weightBuffer == nil, "No weights set yet")
@@ -30,8 +32,11 @@ struct MetalContextTests {
         // Allocate a page-aligned buffer to simulate mmap'd weights
         let size = 65536
         var ptr: UnsafeMutableRawPointer?
-        posix_memalign(&ptr, 16384, size)
-        guard let aligned = ptr else { return }
+        let allocation = posix_memalign(&ptr, 16384, size)
+        #expect(allocation == 0, "posix_memalign failed with errno \(allocation)")
+        // A failed allocation is a broken fixture, not a reason to skip: returning
+        // here reported a pass without ever calling setWeights.
+        let aligned = try #require(ptr)
         defer { free(aligned) }
 
         ctx.setWeights(aligned, size: size)
@@ -39,9 +44,10 @@ struct MetalContextTests {
         #expect(weightBuf.length == size, "Weight buffer length should match input size")
     }
 
-    @Test("2-bit mode uses smaller expert buffers")
+    @Test("2-bit mode uses smaller expert buffers",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func twobitSizing() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let ctx4 = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
         let ctx2 = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: true)
@@ -50,9 +56,10 @@ struct MetalContextTests {
                 "2-bit should allocate smaller expert data buffers")
     }
 
-    @Test("Reset linear attention state zeros buffers")
+    @Test("Reset linear attention state zeros buffers",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func resetState() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
 
         let ctx = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 

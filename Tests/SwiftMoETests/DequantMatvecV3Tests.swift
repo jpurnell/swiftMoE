@@ -157,9 +157,11 @@ struct DequantMatvecV3Tests {
 
     /// `outDim` values that are and are not multiples of the 8 rows per
     /// threadgroup. The non-multiples leave a partial final threadgroup.
-    @Test("Matches CPU reference across row counts", arguments: [8, 16, 13, 5, 1, 23])
+    @Test("Matches CPU reference across row counts",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"),
+          arguments: [8, 16, 13, 5, 1, 23])
     func matchesCPUReference(outDim: Int) throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
         let context = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
         let fixture = Self.makeFixture(outDim: outDim, inDim: 512, groupSize: 64)
@@ -177,9 +179,10 @@ struct DequantMatvecV3Tests {
     /// Skipping the partial threadgroup leaves them at 0, and striding the
     /// cooperative load by a hardcoded 256 leaves them NaN or wildly out of
     /// range; both are caught by requiring the tail to match the reference.
-    @Test("Partial final threadgroup computes its rows")
+    @Test("Partial final threadgroup computes its rows",
+          .enabled(if: ShaderLibraryTests.shadersAvailable, "requires metal_infer/shaders.metal"))
     func partialThreadgroupComputesTailRows() throws {
-        guard let shaderURL = ShaderLibraryTests.shaderURL else { return }
+        let shaderURL = try #require(ShaderLibraryTests.shaderURL)
         let context = try MetalContext(config: .qwen397B, shaderPath: shaderURL.path, use2Bit: false)
 
         let outDim = 13  // one full threadgroup of 8 rows, then a partial group of 5
