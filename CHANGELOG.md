@@ -33,6 +33,17 @@ All notable changes to SwiftMoE are documented in this file.
   and use URL-based `FileManager` APIs throughout
 
 ### Fixed
+- Eleven GPU tests opened with
+  `guard let shaderURL = ShaderLibraryTests.shaderURL else { return }`, so a checkout
+  without `metal_infer/shaders.metal` got eleven green tests that compiled no shader,
+  built no `MetalContext`, and asserted nothing — across `ShaderLibrary`,
+  `MetalContext`, `BatchMatvec`, `DequantMatvecV3`, `TokenGenerator` and `Integration`.
+  The condition is now `ShaderLibraryTests.shadersAvailable`, consumed by an
+  `.enabled(if:)` trait so the framework records a skip; inside the body the URL is
+  unwrapped with `try #require`, because once the trait says the file is there a nil is
+  a defect and not an absence. `MetalContextTests.setWeights` had the same shape after
+  `posix_memalign` — `guard let aligned = ptr else { return }` skipped the `setWeights`
+  call the test is named for — and now checks the errno and requires the pointer
 - `compute_decay_beta` indexed six buffers by thread id with no bound and no element
   count to bound against; it now takes `num_v_heads` and guards on it
 - Command buffers were read after `waitUntilCompleted()` with no check of `status` or
