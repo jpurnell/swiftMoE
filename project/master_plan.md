@@ -86,12 +86,13 @@ SwiftMoE/
 
 - Zero compiler warnings
 - Quality gate clean at 0 errors / 0 warnings across all 45 checkers, no overrides
-- 84 tests, all passing
+- 91 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-08-25 — reconciled after driving the quality gate to 0/0 across
-all 45 checkers. Added GPU dispatch safety to Current Status; test count 82 → 84.
+**Last Updated:** 2026-09-30 — reconciled after clearing the new `fallback` checker
+without overrides. Test count 84 → 91; `SwiftMoE.docc` is no longer excluded from the
+target.

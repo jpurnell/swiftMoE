@@ -35,8 +35,7 @@ let package = Package(
         .target(
             name: "SwiftMoE",
             dependencies: [],
-            path: "Sources/SwiftMoE",
-            exclude: ["SwiftMoE.docc"]
+            path: "Sources/SwiftMoE"
         ),
 
         // MARK: - Executable Targets

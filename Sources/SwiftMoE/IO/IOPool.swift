@@ -8,11 +8,12 @@ public struct IOReadStats: Sendable {
     /// Number of individual pread calls completed.
     public let readCount: Int
 
-    /// Bytes read per second across all reads.
-    public var throughputBytesPerSec: Double {
-        guard totalMs > 0 else { return 0 }
+    /// Bytes read per second across all reads, or `nil` when ``totalMs`` is not
+    /// a positive, finite duration — a rate over no elapsed time is undefined,
+    /// not zero.
+    public var throughputBytesPerSec: Double? {
         let seconds = totalMs / 1000.0
-        guard seconds > 0 else { return 0 }
+        guard seconds.isFinite, seconds > 0 else { return nil }
         return Double(totalBytes) / seconds
     }
 

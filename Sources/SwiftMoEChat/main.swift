@@ -150,7 +150,7 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
         // The server never completed the response. Cancel so the connection is
         // torn down instead of leaking, and hand control back to the prompt.
         task.cancel()
-        logger.error("Request exceeded its \(Int(deadline), privacy: .public)s deadline; cancelled.")
+        logger.error("Request exceeded its \(deadline, format: .fixed(precision: 0), privacy: .public)s deadline; cancelled.")
         FileHandle.standardOutput.write(Data("\n[request timed out]\n".utf8))
     }
 }

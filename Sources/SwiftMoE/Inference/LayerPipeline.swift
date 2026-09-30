@@ -644,9 +644,11 @@ public struct LayerTiming {
         guard layerCount > 0 else { return "" }
         let n = Double(layerCount)
         func fmt(_ v: Double) -> String {
-            let avg = v / n
-            return String(repeating: " ", count: max(0, 6 - "\(Int(avg))".count))
-                + "\((avg * 1000).rounded() / 1000)"
+            // Pad on the rendered integer part rather than on Int(avg): a NaN
+            // or infinite accumulator should print as such, not trap.
+            let text = "\((v / n * 1000).rounded() / 1000)"
+            let integerDigits = text.prefix { $0 != "." }.count
+            return String(repeating: " ", count: max(0, 6 - integerDigits)) + text
         }
         return """
 

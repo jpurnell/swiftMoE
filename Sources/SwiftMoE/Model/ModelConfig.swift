@@ -132,7 +132,23 @@ public struct ModelConfig: Sendable {
     public var kvDim: Int { numKVHeads * headDim }
 
     /// Rotary embedding dimension.
-    public var rotaryDim: Int { Int(Float(headDim) * partialRotary) }
+    ///
+    /// - Returns: `headDim × partialRotary` truncated toward zero, or 0 if
+    ///   ``partialRotary`` is not a fraction within `0...1`. ``RoPE`` treats 0
+    ///   as "rotate nothing".
+    public var rotaryDim: Int {
+        Self.rotaryDim(headDim: headDim, partialRotary: partialRotary)
+    }
+
+    /// Number of leading head dimensions that RoPE rotates.
+    ///
+    /// - Returns: `headDim × partialRotary` truncated toward zero, or 0 if
+    ///   `partialRotary` is not a fraction within `0...1` (NaN included).
+    static func rotaryDim(headDim: Int, partialRotary: Float) -> Int {
+        guard partialRotary >= 0, partialRotary <= 1 else { return 0 }
+        let scaled = (Float(headDim) * partialRotary).rounded(.towardZero)
+        return Int(exactly: scaled) ?? 0
+    }
 
     /// Linear attention conv dimension.
     public var linearConvDim: Int {

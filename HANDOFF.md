@@ -1,6 +1,6 @@
 # HANDOFF — SwiftMoE
 
-**Last session:** 2026-08-25
+**Last session:** 2026-09-30 (fallback checker — see `project/summaries/2026-09-30_FallbackChecker.md`)
 **Branch:** `main` (commit `5fb88bc`)
 **State:** Green. Quality gate 0/0, 84 tests passing, nothing in progress.
 

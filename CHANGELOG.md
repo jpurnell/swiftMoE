@@ -18,7 +18,7 @@ All notable changes to SwiftMoE are documented in this file.
 - OpenAI-compatible HTTP server with SSE streaming
 - Interactive chat client with tool calling support
 - BPE tokenizer (pure Swift, no Python dependency)
-- 84 unit and integration tests with synthetic fixtures
+- 91 unit and integration tests with synthetic fixtures
 
 ### Changed
 - Replaced deprecated CBLAS calls with vDSP equivalents
@@ -29,10 +29,20 @@ All notable changes to SwiftMoE are documented in this file.
 - Elementwise GPU dispatches (SwiGLU, residual add, RMS norm apply, MoE combine,
   conv1d step) and the v3 matvec now dispatch exact thread counts instead of rounding
   the grid up to whole threadgroups
+- `IOReadStats.throughputBytesPerSec` is now `Double?`: `nil` when `totalMs` is not a
+  positive, finite duration. It used to answer `0`, which reads as a measured rate
+- The `SwiftMoE` target no longer excludes `SwiftMoE.docc`, so DocC receives the
+  catalogue and its articles and symbol links are actually checked
 - Tests resolve repo paths from `#filePath` rather than the process working directory,
   and use URL-based `FileManager` APIs throughout
 
 ### Fixed
+- Three `Int(_:)` conversions of floating-point values that nothing showed to be
+  representable — `Int(.nan)` and `Int(.infinity)` trap. `ModelConfig.rotaryDim` now
+  returns a documented 0 ("rotate nothing") when `partialRotary` is not a fraction in
+  `0...1`; `LayerTiming.formatSummary()` pads on the rendered integer part, so a
+  non-finite accumulator prints as `nan`/`inf`; the chat client's timeout log formats
+  the deadline as a `Double` instead of converting it
 - Eleven GPU tests opened with
   `guard let shaderURL = ShaderLibraryTests.shaderURL else { return }`, so a checkout
   without `metal_infer/shaders.metal` got eleven green tests that compiled no shader,
