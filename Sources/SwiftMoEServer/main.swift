@@ -210,7 +210,7 @@ func main() throws {
     if let dir = tempDir {
         let tempDirURL = URL(fileURLWithPath: dir).standardized
         let tempRoot = FileManager.default.temporaryDirectory.standardized
-        guard tempDirURL.path.hasPrefix(tempRoot.path) else {
+        guard PathContainment.isContained(tempDirURL, in: tempRoot) else {
             logger.error("Temp directory path escapes allowed root: \(dir, privacy: .private)")
             return
         }

@@ -31,7 +31,7 @@ public final class SessionStore {
         self.sessionID = sessionID ?? UUID().uuidString
 
         let dirURL = URL(fileURLWithPath: dir).standardized
-        guard dirURL.path.hasPrefix(allowedRoot.path) else { return }
+        guard PathContainment.isContained(dirURL, in: allowedRoot) else { return }
         do {
             try FileManager.default.createDirectory(
                 at: dirURL, withIntermediateDirectories: true)
@@ -46,7 +46,7 @@ public final class SessionStore {
             .appendingPathComponent(sessionID)
             .appendingPathExtension("jsonl")
             .standardized
-        guard url.path.hasPrefix(allowedRoot.path) else {
+        guard PathContainment.isContained(url, in: allowedRoot) else {
             return allowedRoot.appendingPathComponent("invalid.jsonl").path
         }
         return url.path
@@ -55,7 +55,7 @@ public final class SessionStore {
     /// Validates a path stays within the allowed root directory.
     private func validated(_ path: String) -> URL? {
         let resolved = URL(fileURLWithPath: path).standardized
-        guard resolved.path.hasPrefix(allowedRoot.path) else {
+        guard PathContainment.isContained(resolved, in: allowedRoot) else {
             logger.error("Path traversal blocked: \(path, privacy: .private)")
             return nil
         }
