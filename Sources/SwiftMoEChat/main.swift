@@ -171,7 +171,7 @@ func main() {
     let homeURL = URL(fileURLWithPath: home).standardized
     let flashMoeDirURL = URL(fileURLWithPath: home)
         .appendingPathComponent(".flash-moe").standardized
-    guard flashMoeDirURL.path.hasPrefix(homeURL.path) else {
+    guard PathContainment.isContained(flashMoeDirURL, in: homeURL) else {
         logger.error("Resolved config path escapes home directory")
         return
     }

@@ -4,6 +4,14 @@ All notable changes to SwiftMoE are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Six containment checks — the weight manifest, the session store, and the chat and server
+  entry points — used `path.hasPrefix(root.path)`. `…/sessions-other/x.jsonl` begins with
+  `…/sessions`, so a session id of `../sessions-other/x` was written outside the sessions
+  directory (the id comes from the chat CLI's own configuration). All six use
+  `PathContainment.isContained(_:in:)`, which compares whole components after resolving `..`
+  and symbolic links; tested for a sibling, a climb out, and a link out.
+
 ### Added
 - `MTLCommandBuffer.waitUntilCompletedChecked(_:)` — traps on a failed dispatch instead
   of letting callers read a stale buffer as if it were a result

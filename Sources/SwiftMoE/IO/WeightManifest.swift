@@ -49,7 +49,7 @@ public struct WeightManifest: Sendable {
         } else {
             rootURL = resolvedURL.deletingLastPathComponent()
         }
-        guard resolvedURL.path.hasPrefix(rootURL.path) else {
+        guard PathContainment.isContained(resolvedURL, in: rootURL) else {
             throw FlashMoEError.pathTraversal(path: resolvedURL.path, allowedRoot: rootURL.path)
         }
 
