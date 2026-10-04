@@ -14,7 +14,7 @@ Based on the [Flash-MoE](https://github.com/danveloper/flash-moe) inference engi
 
 ### Key Differentiators
 - **Model-agnostic**: Runtime `ModelConfig` with presets — no hardcoded architecture constants
-- **Fully tested**: 82 tests with tiny synthetic model fixtures (no 210GB download needed)
+- **Fully tested**: 105 tests with tiny synthetic model fixtures (no 210GB download needed)
 - **All GPU paths**: 7 GPU optimization paths with automatic CPU fallback
 - **Pure Swift**: No C dependencies in the main library
 - **OpenAI-compatible**: `/v1/chat/completions` HTTP server with SSE streaming
@@ -47,7 +47,7 @@ SwiftMoE/
 │   └── Server/        HTTPServer, SSEWriter, SessionStore
 ├── Sources/SwiftMoEServer/   HTTP server executable
 ├── Sources/SwiftMoEChat/     Interactive TUI executable
-├── Tests/SwiftMoETests/      82 tests, 21 suites
+├── Tests/SwiftMoETests/      105 tests, 26 suites
 └── metal_infer/              Original Obj-C reference implementation
 ```
 
@@ -67,7 +67,8 @@ SwiftMoE/
 - [x] GPU pipeline: CMD3 fast path (skip deferred wait)
 - [x] Token generation loop (embed → 60 layers → norm → lm_head → argmax)
 - [x] BPE tokenizer (pure Swift, binary format compatible)
-- [x] HTTP server with SSE streaming (OpenAI-compatible)
+- [x] HTTP server with SSE streaming (OpenAI-compatible) — binds loopback by default;
+      a wider bind is an explicit `host`. Still unauthenticated (see Remaining)
 - [x] Chat TUI with session persistence
 - [x] Runtime ModelConfig with presets (.qwen397B, .tiny)
 - [x] Synthetic test fixtures (SyntheticFixtures + ModelConfig.tiny)
@@ -79,6 +80,8 @@ SwiftMoE/
 - [ ] Performance benchmarking against original C engine
 - [ ] DocC documentation generation
 - [ ] Additional model presets (DeepSeek-V3, Mixtral)
+- [ ] HTTP server: authentication (bearer token), a restricted CORS origin instead of `*`,
+      a read deadline, and a cap on `max_tokens` — none exist; loopback is the only control
 
 ---
 
@@ -86,13 +89,15 @@ SwiftMoE/
 
 - Zero compiler warnings
 - Quality gate clean at 0 errors / 0 warnings across all 45 checkers, no overrides
-- 91 tests, all passing
+- 105 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-09-30 — reconciled after clearing the new `fallback` checker
-without overrides. Test count 84 → 91; `SwiftMoE.docc` is no longer excluded from the
-target.
+**Last Updated:** 2026-10-03 — reconciled after the listener-defaults fix: the HTTP server
+binds loopback by default and session ids come from a generator rather than `UUID()`. Test
+count 91 → 105 and suites 23 → 26 (both were already stale: main ran 95 tests in 24 suites); the Overview and Module
+Structure counts, which still said 82/21, are corrected too. The server's missing
+authentication is recorded under Remaining rather than left implied.

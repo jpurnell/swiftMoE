@@ -25,4 +25,10 @@ public enum FlashMoEError: Error, Sendable {
 
     /// A resolved path escapes its allowed directory.
     case pathTraversal(path: String, allowedRoot: String)
+
+    /// A listener was asked to bind something that is not an IPv4 literal.
+    ///
+    /// Host names are refused rather than resolved, so a name can never widen a listener past
+    /// the address its caller wrote down.
+    case invalidBindAddress(host: String)
 }

@@ -22,13 +22,59 @@ public final class SessionStore {
     /// Current session ID.
     public private(set) var sessionID: String
 
+    /// Number of random bytes in a generated session id.
+    private static let sessionIDByteCount = 32
+
+    /// Generates a session id: 32 bytes from `generator`, as 64 lowercase hex digits.
+    ///
+    /// The id names the file a conversation is stored in, so it is drawn to be unguessable
+    /// rather than merely unique. A UUID is the wrong tool for that — RFC 4122 §6 says not to
+    /// assume UUIDs are hard to guess.
+    ///
+    /// The generator is a parameter so that the program's entry point names it once, and so a
+    /// test can state the bytes it expects. Anything that names a real session must pass
+    /// `SystemRandomNumberGenerator`: an id is only as unpredictable as its generator.
+    ///
+    /// Four 64-bit words are drawn and each is rendered most-significant byte first, so the
+    /// output is a function of the generator's words alone.
+    ///
+    /// - Parameter generator: Source of randomness.
+    /// - Returns: A 64-character lowercase hexadecimal string.
+    public static func makeSessionID(using generator: inout some RandomNumberGenerator) -> String {
+        let wordCount = sessionIDByteCount / MemoryLayout<UInt64>.size
+        let hexDigitsPerWord = MemoryLayout<UInt64>.size * 2
+        return (0..<wordCount).map { _ in
+            let hex = String(generator.next(), radix: 16)
+            return String(repeating: "0", count: hexDigitsPerWord - hex.count) + hex
+        }.joined()
+    }
+
     /// Creates a new session store, optionally resuming an existing session.
-    public init(sessionID: String? = nil) {
+    ///
+    /// ```swift
+    /// var entropy = SystemRandomNumberGenerator()
+    /// let store = SessionStore(sessionID: nil, using: &entropy)
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - sessionID: Id of a session to resume. When `nil`, a new id is drawn from
+    ///     `generator` with ``makeSessionID(using:)``.
+    ///   - generator: Source of randomness for a new id. Pass `SystemRandomNumberGenerator`.
+    public convenience init(sessionID: String? = nil, using generator: inout some RandomNumberGenerator) {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? "/tmp"
-        let dir = "\(home)/.flash-moe/sessions"
+        self.init(sessionID: sessionID, sessionsDirectory: "\(home)/.flash-moe/sessions", using: &generator)
+    }
+
+    /// Creates a session store rooted at an explicit directory.
+    ///
+    /// - Parameters:
+    ///   - sessionID: Id of a session to resume, or `nil` to generate one.
+    ///   - sessionsDirectory: Directory that holds the session files.
+    ///   - generator: Source of randomness for a new id.
+    init(sessionID: String?, sessionsDirectory dir: String, using generator: inout some RandomNumberGenerator) {
         self.sessionsDir = dir
         self.allowedRoot = URL(fileURLWithPath: dir).standardized
-        self.sessionID = sessionID ?? UUID().uuidString
+        self.sessionID = sessionID ?? Self.makeSessionID(using: &generator)
 
         let dirURL = URL(fileURLWithPath: dir).standardized
         guard PathContainment.isContained(dirURL, in: allowedRoot) else { return }

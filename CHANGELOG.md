@@ -4,6 +4,42 @@ All notable changes to SwiftMoE are documented in this file.
 
 ## [Unreleased]
 
+No version of SwiftMoE has been tagged, so there is no number to bump; the next tag should be
+a minor (`0.x`) or major release, because the two changes below break source.
+
+### Security — breaking
+- **The HTTP server bound every interface and said it was on `localhost`.** `HTTPServer` bound
+  `INADDR_ANY` and logged `http://localhost:<port>/…`. The server has no authentication, so
+  any machine that could route to the port could run inference. It now binds `127.0.0.1`
+  unless told otherwise, and the log line is the address read back from the socket with
+  `getsockname`, with a warning when that address is not loopback.
+  - `HTTPServer.init(host:port:handler:)` — new `host` parameter, default
+    `HTTPServer.loopbackHost` (`"127.0.0.1"`). It takes an IPv4 literal; a host name is
+    refused with `FlashMoEError.invalidBindAddress(host:)` rather than resolved.
+  - `HTTPServer.openListener()` binds and returns an `HTTPServer.BoundAddress`;
+    `HTTPServer.boundAddress` reads it back later. Port `0` reports the port the kernel chose.
+  - `HTTPServer.ipv4Address(_:)`, `HTTPServer.isLoopback(_:)`.
+  - `swift-moe-server --host <ipv4>`.
+- **A new session's id was a UUID.** `SessionStore(sessionID: nil)` used `UUID().uuidString`.
+  A UUID is built to be unique, not unguessable. The id is now 32 bytes from a
+  `RandomNumberGenerator`, as 64 lowercase hex digits (`SessionStore.makeSessionID(using:)`),
+  and the chat client passes the system generator. Session files already on disk keep their
+  names and still resume by id.
+
+### Migration
+- **Anyone who reached the server from another machine**: it no longer answers there. Pass
+  the address to publish on — `swift-moe-server --host 0.0.0.0`, or
+  `HTTPServer(host: "0.0.0.0", port: 8080) { … }` — knowing that it is unauthenticated.
+  Prefer leaving it on loopback behind a reverse proxy that authenticates.
+- `HTTPServer(port:handler:)` compiles unchanged and now means loopback.
+- `SessionStore()` / `SessionStore(sessionID:)` no longer compile. Name the generator:
+  ```swift
+  var entropy = SystemRandomNumberGenerator()
+  let store = SessionStore(sessionID: resumedID, using: &entropy)
+  ```
+- A `switch` over `FlashMoEError` without a `default` needs the new
+  `.invalidBindAddress(host:)` case.
+
 ### Fixed
 - Six containment checks — the weight manifest, the session store, and the chat and server
   entry points — used `path.hasPrefix(root.path)`. `…/sessions-other/x.jsonl` begins with
