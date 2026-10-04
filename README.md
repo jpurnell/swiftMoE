@@ -13,7 +13,7 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 - **Runtime Configurable** -- `ModelConfig` presets for any MoE architecture (Qwen, DeepSeek, etc.)
 - **OpenAI-Compatible Server** -- `/v1/chat/completions` with SSE streaming
 - **Pure Swift** -- No Python, no ML frameworks, no C dependencies (except optional linenoise for TUI)
-- **82 Tests** -- Full TDD coverage with tiny synthetic model fixtures
+- **105 Tests** -- Full TDD coverage with tiny synthetic model fixtures
 
 ## Quick Start
 
@@ -32,6 +32,21 @@ curl -N -X POST http://localhost:8080/v1/chat/completions \
 # Run tests
 swift test
 ```
+
+### The server is unauthenticated, and binds loopback
+
+`swift-moe-server` has no authentication: anything that can connect to the port can run
+inference. It therefore listens on `127.0.0.1` only, and logs the address it actually bound.
+To reach it from another machine, say so:
+
+```bash
+swift run swift-moe-server --demo --host 0.0.0.0 --port 8080   # every interface, no auth
+```
+
+Do that only on a network you trust, or keep it on loopback behind a reverse proxy that
+authenticates. `--host` takes an IPv4 address; host names are refused rather than resolved.
+The same default applies to the library: `HTTPServer(port:handler:)` is loopback, and
+`HTTPServer(host:port:handler:)` is the explicit form.
 
 ## Architecture
 
@@ -54,7 +69,7 @@ SwiftMoE/
     SwiftMoEServer/   Executable: OpenAI-compatible HTTP server
     SwiftMoEChat/     Executable: Interactive TUI chat client
   Tests/
-    SwiftMoETests/    91 tests across 23 suites (0.5s)
+    SwiftMoETests/    105 tests across 26 suites (0.5s)
   metal_infer/        Original Obj-C/Metal reference implementation
 ```
 

@@ -22,6 +22,16 @@ The per-layer budget is 2.9 ms, which is why resource ownership is expressed wit
 traffic in the hot path. That decision and its consequences are recorded in
 `project/decisions/architecture_decisions.md`.
 
+## Serving
+
+``HTTPServer`` exposes `/v1/chat/completions` with no authentication, so it binds the
+loopback interface unless a caller names another address. `HTTPServer(port:handler:)`
+listens on `127.0.0.1`; `HTTPServer(host:port:handler:)` is how a wider bind is written
+down. ``HTTPServer/openListener()`` returns the address the socket actually holds.
+
+``SessionStore`` names conversation files by an id drawn from a
+`RandomNumberGenerator` — 32 bytes, hex — rather than a UUID.
+
 ## Topics
 
 ### Pipeline
@@ -32,3 +42,9 @@ traffic in the hot path. That decision and its consequences are recorded in
 ### Configuration
 
 - ``ModelConfig``
+
+### Serving
+
+- ``HTTPServer``
+- ``SSEWriter``
+- ``SessionStore``
