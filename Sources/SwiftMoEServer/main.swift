@@ -8,8 +8,11 @@ import SwiftMoE
 // flash-moe-server — OpenAI-compatible HTTP server with SSE streaming
 //
 // Usage:
-//   flash-moe-server --model <path> [--port 8080] [--k 4] [--2bit] [--timing]
+//   flash-moe-server --model <path> [--host 127.0.0.1] [--port 8080] [--k 4] [--2bit] [--timing]
 //   flash-moe-server --demo [--port 8080]     # Run with tiny synthetic model
+//
+// The server has no authentication. It binds loopback unless --host names another
+// IPv4 address; --host 0.0.0.0 publishes it to every network the machine is on.
 //
 // API:
 //   POST /v1/chat/completions  (OpenAI chat format, SSE response)
@@ -19,6 +22,7 @@ private let logger = Logger(subsystem: "com.swiftmoe.server", category: "main")
 
 struct ServerConfig {
     var modelPath: String?
+    var host: String = HTTPServer.loopbackHost
     var port: UInt16 = 8080
     var activeExperts: Int = 4
     var use2Bit: Bool = false
@@ -34,6 +38,7 @@ func parseArgs() -> ServerConfig {
     while i < args.count {
         switch args[i] {
         case "--model": i += 1; if i < args.count { config.modelPath = args[i] }
+        case "--host": i += 1; if i < args.count { config.host = args[i] }
         case "--port": i += 1; if i < args.count { config.port = UInt16(args[i]) ?? 8080 }
         case "--k": i += 1; if i < args.count { config.activeExperts = Int(args[i]) ?? 4 }
         case "--2bit": config.use2Bit = true
@@ -177,7 +182,7 @@ func main() throws {
     logger.info("[server] Config: \(modelConfig.numLayers, privacy: .public) layers, \(modelConfig.numExperts, privacy: .public) experts, K=\(serverConfig.activeExperts, privacy: .public)")
 
     // ---- Start HTTP server ----
-    let server = HTTPServer(port: serverConfig.port) { prompt, maxTokens, writer in
+    let server = HTTPServer(host: serverConfig.host, port: serverConfig.port) { prompt, maxTokens, writer in
         logger.info("[request] prompt=\(prompt.prefix(80), privacy: .private)... maxTokens=\(maxTokens, privacy: .public)")
 
         writer.sendHeaders()
