@@ -157,7 +157,10 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
 
 func main() {
     let chatConfig = parseArgs()
-    let session = SessionStore(sessionID: chatConfig.sessionID)
+    // The entry point is where the production generator is named: a new session's id is
+    // drawn from the system generator, which is what makes it unguessable.
+    var entropy = SystemRandomNumberGenerator()
+    let session = SessionStore(sessionID: chatConfig.sessionID, using: &entropy)
 
     logger.info("Flash-MoE Chat")
     logger.info("Server: \(chatConfig.serverURL, privacy: .public)")
