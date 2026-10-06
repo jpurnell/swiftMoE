@@ -7,32 +7,45 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 
 /// Minimal HTTP server for OpenAI-compatible chat completions with SSE streaming.
 ///
-/// Listens on a TCP port and handles `/v1/chat/completions` POST requests.
-/// Each request spawns token generation and streams results via SSE.
+/// Listens on a TCP port and answers `POST /v1/chat/completions`, streaming tokens as
+/// Server-Sent Events.
 ///
-/// ## Reachability
-/// The server has **no authentication**: whoever can open a connection to the port can run
-/// inference. It therefore binds the loopback interface (`127.0.0.1`) unless a caller names
-/// another address. Passing `host: "0.0.0.0"` — or any non-loopback address — publishes an
-/// unauthenticated endpoint to every machine that can route to it, and is a decision for the
-/// caller to make in writing, not a default.
+/// ## Who may call it
+/// Running inference is the whole of what this server does, so reaching the handler is the
+/// thing guarded:
+///
+/// - **Credential.** A server is created with an ``Authentication``; there is no default.
+///   ``Authentication/bearer(_:)`` requires `Authorization: Bearer <key>` on every request and
+///   answers 401 otherwise. ``Authentication/unauthenticatedLoopback`` checks nothing, and
+///   ``openListener()`` refuses it for any address that is not loopback.
+/// - **Origin.** No CORS header is sent unless an origin is on `allowedOrigins`, and a request
+///   carrying any other `Origin` is refused. Loopback does not keep a web page out — the
+///   browser is on loopback too — so this is what does.
+/// - **Host.** On a loopback bind the `Host` header must be the bound address or `localhost`
+///   with the bound port, which is what defeats DNS rebinding.
+/// - **Limits.** ``Limits`` bounds tokens, header and body size, and how long a client may take.
 ///
 /// ```swift
-/// let server = HTTPServer(port: 8080) { prompt, maxTokens, writer in
+/// let key = try APIKey(String(repeating: "k", count: 32))
+/// let server = HTTPServer(port: 8080, authentication: .bearer(BearerCredential(key: key))) { prompt, maxTokens, writer in
 ///     writer.sendHeaders()
 ///     writer.sendDone()
 /// }
 /// let bound = try server.openListener()   // 127.0.0.1:8080
-/// try server.start()
+/// server.stop()
 /// ```
+///
+/// ## Concurrency
+/// Connections are read on a bounded pool, so a client that is slow or silent delays nobody
+/// else; the handler is called for one request at a time.
 ///
 /// ## Protocol
 /// - **Endpoint:** `POST /v1/chat/completions`
-/// - **Request body:** OpenAI chat completion format (messages array)
-/// - **Response:** Server-Sent Events with token deltas
+/// - **Request body:** OpenAI chat completion format (messages array), with `Content-Length`
+/// - **Response:** Server-Sent Events with token deltas, or a JSON error
 ///
 /// Matches the server in `infer.m:5635-6500`.
-public final class HTTPServer {
+public final class HTTPServer: Sendable {
 
     /// The loopback address, `127.0.0.1` — the default bind address.
     public static let loopbackHost = "127.0.0.1"
@@ -76,32 +89,80 @@ public final class HTTPServer {
         _ sseWriter: SSEWriter
     ) -> Void
 
-    private let handler: RequestHandler
-    private var serverFD: Int32 = -1
-    private var shouldStop = false
+    /// How callers are authenticated.
+    public let authentication: Authentication
+
+    /// Origins whose pages may call this server. Empty — the default — sends no CORS headers.
+    public let allowedOrigins: [String]
+
+    /// Bounds on a request and a connection.
+    public let limits: Limits
+
+    /// The listening socket and the accept loop's progress, guarded together.
+    private struct State {
+        /// The listening socket, or -1.
+        var descriptor: Int32 = -1
+        /// Whether ``start()`` is inside its accept loop.
+        var accepting = false
+        /// Set by ``stop()``; the accept loop leaves when it sees it.
+        var stopRequested = false
+        /// A socket ``stop()`` retired while the loop was still polling it. The loop closes it.
+        var retired: Int32 = -1
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let processor: HTTPConnectionProcessor
+    /// One permit per connection being served.
+    private let connectionSlots: DispatchSemaphore
+    /// One permit per over-limit connection being told the server is busy.
+    private let refusalSlots: DispatchSemaphore
+
+    /// How often the accept loop looks up from `poll(2)` to see whether it has been stopped.
+    private static let acceptPollMilliseconds: Int32 = 100
+    /// Connections the kernel queues ahead of `accept(2)`.
+    private static let listenBacklog: Int32 = 16
 
     /// Creates an HTTP server.
     ///
-    /// The server is unauthenticated, so `host` defaults to loopback. Name another address only
-    /// when the endpoint is meant to be reachable from other machines.
-    ///
     /// - Parameters:
     ///   - host: IPv4 literal to bind (default ``loopbackHost``, `127.0.0.1`). Host names are
-    ///     not resolved; `"0.0.0.0"` binds every interface.
+    ///     not resolved; `"0.0.0.0"` binds every interface, and requires a bearer credential.
     ///   - port: TCP port to listen on (default 8080). `0` lets the kernel choose.
-    ///   - handler: Callback invoked for each chat completion request.
-    public init(host: String = HTTPServer.loopbackHost, port: UInt16 = 8080, handler: @escaping RequestHandler) {
+    ///   - authentication: How callers are authenticated. Deliberately without a default.
+    ///   - allowedOrigins: Origins, as `scheme://host[:port]`, whose pages may call the server.
+    ///   - limits: Bounds on a request and a connection.
+    ///   - handler: Callback invoked for each chat completion request, one at a time, on a
+    ///     background thread.
+    public init(
+        host: String = HTTPServer.loopbackHost,
+        port: UInt16 = 8080,
+        authentication: Authentication,
+        allowedOrigins: [String] = [],
+        limits: Limits = Limits(),
+        handler: @escaping RequestHandler
+    ) {
         self.host = host
         self.port = port
-        self.handler = handler
+        self.authentication = authentication
+        self.allowedOrigins = allowedOrigins
+        self.limits = limits
+        self.processor = HTTPConnectionProcessor(
+            authentication: authentication,
+            allowedOrigins: allowedOrigins,
+            limits: limits,
+            handler: SerializedHandler(handler)
+        )
+        self.connectionSlots = DispatchSemaphore(value: max(0, limits.maxConnections))
+        self.refusalSlots = DispatchSemaphore(value: max(0, limits.maxConnections))
     }
 
     /// The address the listening socket is bound to, or `nil` when the server is not listening.
     ///
     /// Read from the socket with `getsockname(2)` on every access.
     public var boundAddress: BoundAddress? {
-        guard serverFD >= 0 else { return nil }
-        return Self.socketName(serverFD)
+        state.withLock { current in
+            current.descriptor >= 0 ? Self.socketName(current.descriptor) : nil
+        }
     }
 
     /// Parses a dotted-quad IPv4 literal into a network-byte-order address.
@@ -132,9 +193,16 @@ public final class HTTPServer {
     /// Idempotent: a server that is already listening returns its current address. ``start()``
     /// calls this itself; call it first to learn the address before blocking in `start()`.
     ///
+    /// Nothing is bound until the configuration has been checked, so a server that may not
+    /// listen never holds the port.
+    ///
     /// - Returns: The address the socket is bound to, as the kernel reports it.
     /// - Throws: ``FlashMoEError/invalidBindAddress(host:)`` when ``host`` is not an IPv4
-    ///   literal; ``FlashMoEError/readFailed(errno:context:)`` when a socket call fails.
+    ///   literal; ``HTTPServerError/credentialRequired(host:)`` when ``host`` is not loopback
+    ///   and ``authentication`` is ``Authentication/unauthenticatedLoopback``;
+    ///   ``HTTPServerError/invalidOrigin(_:)`` and ``HTTPServerError/invalidLimit(name:)`` for
+    ///   a bad allowlist entry or limit; ``FlashMoEError/readFailed(errno:context:)`` when a
+    ///   socket call fails.
     @discardableResult
     public func openListener() throws -> BoundAddress {
         if let existing = boundAddress { return existing }
@@ -142,6 +210,13 @@ public final class HTTPServer {
         guard let address = Self.ipv4Address(host) else {
             throw FlashMoEError.invalidBindAddress(host: host)
         }
+        if case .unauthenticatedLoopback = authentication, !Self.isLoopback(host) {
+            throw HTTPServerError.credentialRequired(host: host)
+        }
+        for origin in allowedOrigins where !Self.isOrigin(origin) {
+            throw HTTPServerError.invalidOrigin(origin)
+        }
+        try limits.validate()
 
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -163,7 +238,7 @@ public final class HTTPServer {
             throw FlashMoEError.readFailed(errno: code, context: "bind(\(host):\(port))")
         }
 
-        guard listen(fd, 5) == 0 else {
+        guard listen(fd, Self.listenBacklog) == 0 else {
             let code = errno
             close(fd)
             throw FlashMoEError.readFailed(errno: code, context: "listen()")
@@ -175,135 +250,101 @@ public final class HTTPServer {
             throw FlashMoEError.readFailed(errno: code, context: "getsockname()")
         }
 
-        serverFD = fd
-        shouldStop = false
+        state.withLock { current in
+            current.descriptor = fd
+            current.stopRequested = false
+        }
         return bound
     }
 
     /// Starts the server and blocks, accepting connections.
     ///
-    /// This method does not return until the server is stopped or an error occurs.
+    /// This method does not return until the server is stopped or an error occurs. Each
+    /// accepted connection is handed to a worker, so the loop is back in `accept` at once.
     public func start() throws {
         let bound = try openListener()
-
-        logger.info("[server] Listening on \(bound.endpoint, privacy: .public)")
-        if !Self.isLoopback(bound.host) {
-            logger.warning("[server] Bound to \(bound.host, privacy: .public), which is not loopback. This server has no authentication: any machine that can reach the port can run inference.")
+        let listener = state.withLock { current -> Int32 in
+            current.accepting = true
+            return current.descriptor
+        }
+        defer {
+            let retired = state.withLock { current -> Int32 in
+                current.accepting = false
+                let descriptor = current.retired
+                current.retired = -1
+                return descriptor
+            }
+            if retired >= 0 { close(retired) }
         }
 
-        while !shouldStop {
+        logger.info("[server] Listening on \(bound.endpoint, privacy: .public)")
+        switch authentication {
+        case .bearer:
+            logger.info("[server] Bearer credential required.")
+        case .unauthenticatedLoopback:
+            logger.warning("[server] Running WITHOUT authentication on \(bound.host, privacy: .public): any local process can run inference.")
+        }
+        if !Self.isLoopback(bound.host) {
+            logger.warning("[server] Bound to \(bound.host, privacy: .public), which is not loopback: the bearer key travels in clear text unless TLS is terminated in front of this server.")
+        }
+
+        while !state.withLock({ $0.stopRequested }) {
+            var readiness = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+            guard poll(&readiness, 1, Self.acceptPollMilliseconds) > 0 else { continue }
+
             var clientAddr = sockaddr_in()
             var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-
-            let clientFD = Self.acceptSocket(serverFD, &clientAddr, &addrLen)
+            let clientFD = Self.acceptSocket(listener, &clientAddr, &addrLen)
             guard clientFD >= 0 else { continue }
 
-            handleConnection(clientFD)
+            dispatch(clientFD, bound: bound)
+        }
+    }
+
+    /// Hands an accepted connection to a thread of its own, or refuses it when the server is full.
+    ///
+    /// A thread per connection, rather than a dispatch queue: a worker spends its life blocked
+    /// in `poll(2)`, and a shared pool that declines to grow while its threads are blocked
+    /// would turn sixteen silent clients back into a stalled server. The two semaphores bound
+    /// the threads at twice ``Limits/maxConnections``.
+    private func dispatch(_ clientFD: Int32, bound: BoundAddress) {
+        let processor = self.processor
+        if connectionSlots.wait(timeout: .now()) == .success {
+            let slots = connectionSlots
+            Thread.detachNewThread {
+                processor.serve(clientFD, bound: bound)
+                slots.signal()
+            }
+        } else if refusalSlots.wait(timeout: .now()) == .success {
+            let slots = refusalSlots
+            Thread.detachNewThread {
+                processor.refuseBusy(clientFD)
+                slots.signal()
+            }
+        } else {
+            // Past both bounds there is no thread left to say why; the connection is dropped.
             close(clientFD)
         }
     }
 
     /// Stops the server.
+    ///
+    /// The listening socket stops being this server's at once — ``boundAddress`` is `nil` on
+    /// return. Connections already accepted run to completion.
     public func stop() {
-        shouldStop = true
-        if serverFD >= 0 {
-            close(serverFD)
-            serverFD = -1
+        let toClose = state.withLock { current -> Int32 in
+            current.stopRequested = true
+            let descriptor = current.descriptor
+            current.descriptor = -1
+            guard current.accepting else { return descriptor }
+            // The accept loop is polling this socket; it closes it on the way out.
+            current.retired = descriptor
+            return -1
         }
+        if toClose >= 0 { close(toClose) }
     }
 
     // MARK: - Private
-
-    private func handleConnection(_ clientFD: Int32) {
-        // Read HTTP request
-        var buf = [UInt8](repeating: 0, count: 65536)
-        var total = 0
-
-        // Read until we find \r\n\r\n (end of headers)
-        buf.withUnsafeMutableBufferPointer { bufPtr in
-            guard let base = bufPtr.baseAddress else { return }
-            while total < bufPtr.count - 1 {
-                let n = Darwin.read(clientFD, base + total, 1)
-                if n <= 0 { return }
-                total += 1
-                if total >= 4 &&
-                    bufPtr[total-4] == 0x0D && bufPtr[total-3] == 0x0A &&
-                    bufPtr[total-2] == 0x0D && bufPtr[total-1] == 0x0A {
-                    break
-                }
-            }
-        }
-
-        let headerString = String(bytes: buf[0..<total], encoding: .utf8) ?? ""
-
-        // Read body if Content-Length present
-        if let clRange = headerString.range(of: "Content-Length:", options: .caseInsensitive) {
-            let afterCL = headerString[clRange.upperBound...]
-            if let contentLen = Int(afterCL.prefix(while: { $0.isNumber || $0 == " " }).trimmingCharacters(in: .whitespaces)) {
-                if contentLen > 0 && total + contentLen < buf.count - 1 {
-                    buf.withUnsafeMutableBufferPointer { bufPtr in
-                        guard let base = bufPtr.baseAddress else { return }
-                        var bodyRead = 0
-                        while bodyRead < contentLen {
-                            let n = Darwin.read(clientFD, base + total + bodyRead, contentLen - bodyRead)
-                            if n <= 0 { break }
-                            bodyRead += n
-                        }
-                        total += bodyRead
-                    }
-                }
-            }
-        }
-
-        let requestString = String(bytes: buf[0..<total], encoding: .utf8) ?? ""
-
-        // Handle CORS preflight
-        if headerString.hasPrefix("OPTIONS") {
-            let response = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n\r\n"
-            let responseBytes = Array(response.utf8)
-            responseBytes.withUnsafeBufferPointer { respBuf in
-                guard let base = respBuf.baseAddress else { return }
-                _ = Darwin.write(clientFD, base, respBuf.count)
-            }
-            return
-        }
-
-        // Only handle POST /v1/chat/completions
-        guard headerString.hasPrefix("POST") && headerString.contains("/v1/chat/completions") else {
-            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
-            let responseBytes = Array(response.utf8)
-            responseBytes.withUnsafeBufferPointer { respBuf in
-                guard let base = respBuf.baseAddress else { return }
-                _ = Darwin.write(clientFD, base, respBuf.count)
-            }
-            return
-        }
-
-        // Extract prompt from OpenAI messages format
-        let prompt = extractLastContent(from: requestString) ?? ""
-        let maxTokens = extractMaxTokens(from: requestString, default: 100)
-
-        let writer = SSEWriter(fileDescriptor: clientFD)
-        handler(prompt, maxTokens, writer)
-    }
-
-    /// Extracts the last "content" value from an OpenAI messages array.
-    private func extractLastContent(from request: String) -> String? {
-        guard let bodyStart = request.range(of: "\r\n\r\n") else { return nil }
-        let body = String(request[bodyStart.upperBound...])
-
-        guard let data = body.data(using: .utf8) else { return nil }
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let messages = json["messages"] as? [[String: Any]] else {
-                return nil
-            }
-            return messages.last?["content"] as? String
-        } catch {
-            logger.debug("Failed to parse chat request JSON: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-    }
 
     /// Binds a socket to a sockaddr_in using heap-allocated storage to avoid nested withUnsafe scopes.
     private static func bindSocket(_ fd: Int32, _ addr: inout sockaddr_in) -> Int32 {
@@ -347,24 +388,5 @@ public final class HTTPServer {
         let result = accept(fd, sockPtr, &addrLen)
         addr = raw.load(as: sockaddr_in.self)
         return result
-    }
-
-    /// Extracts max_tokens or max_completion_tokens from request body.
-    private func extractMaxTokens(from request: String, default defaultVal: Int) -> Int {
-        guard let bodyStart = request.range(of: "\r\n\r\n") else { return defaultVal }
-        let body = String(request[bodyStart.upperBound...])
-
-        guard let data = body.data(using: .utf8) else { return defaultVal }
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return defaultVal
-            }
-            if let max = json["max_completion_tokens"] as? Int { return max }
-            if let max = json["max_tokens"] as? Int { return max }
-            return defaultVal
-        } catch {
-            logger.debug("Failed to parse max_tokens JSON: \(error.localizedDescription, privacy: .public)")
-            return defaultVal
-        }
     }
 }

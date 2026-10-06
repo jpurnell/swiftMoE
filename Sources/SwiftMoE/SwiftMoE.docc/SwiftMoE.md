@@ -24,10 +24,27 @@ traffic in the hot path. That decision and its consequences are recorded in
 
 ## Serving
 
-``HTTPServer`` exposes `/v1/chat/completions` with no authentication, so it binds the
-loopback interface unless a caller names another address. `HTTPServer(port:handler:)`
-listens on `127.0.0.1`; `HTTPServer(host:port:handler:)` is how a wider bind is written
-down. ``HTTPServer/openListener()`` returns the address the socket actually holds.
+``HTTPServer`` exposes `POST /v1/chat/completions`. Reaching its handler means running
+inference, so that is what it guards:
+
+- **Credential.** A server is created with an ``HTTPServer/Authentication`` and there is no
+  default. ``HTTPServer/Authentication/bearer(_:)`` requires `Authorization: Bearer <key>` and
+  answers `401` otherwise, before reading the body. An ``APIKey`` comes from the
+  `SWIFT_MOE_API_KEY` variable or an owner-only file; the server keeps a ``BearerCredential`` —
+  the key's SHA-256 digest — and compares digests in constant time.
+  ``HTTPServer/Authentication/unauthenticatedLoopback`` checks nothing, and
+  ``HTTPServer/openListener()`` refuses it for any address outside `127.0.0.0/8`.
+- **Origin and Host.** No CORS header is sent unless the request's `Origin` is on the server's
+  allowlist, in which case that origin is echoed with `Vary: Origin`; any other `Origin` is
+  refused. On a loopback bind the `Host` header must name the bound address or `localhost`.
+- **Limits.** ``HTTPServer/Limits`` caps tokens per request (8192,
+  ``TokenGenerator/defaultMaxSequenceLength``), header and body size, and the time a client may
+  take. A request over a limit is refused with a status and a sentence; nothing is clamped.
+
+The listener binds `127.0.0.1` unless a caller names another address, and
+``HTTPServer/openListener()`` returns the address the socket actually holds. Connections are
+read concurrently; the handler runs one request at a time. ``HTTPServerError`` describes every
+reason a server refuses to start.
 
 ``SessionStore`` names conversation files by an id drawn from a
 `RandomNumberGenerator` — 32 bytes, hex — rather than a UUID.
@@ -46,5 +63,8 @@ down. ``HTTPServer/openListener()`` returns the address the socket actually hold
 ### Serving
 
 - ``HTTPServer``
+- ``APIKey``
+- ``BearerCredential``
+- ``HTTPServerError``
 - ``SSEWriter``
 - ``SessionStore``

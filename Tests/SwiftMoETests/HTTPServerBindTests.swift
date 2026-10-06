@@ -4,18 +4,17 @@ import Testing
 
 /// Which address the HTTP server's socket is bound to.
 ///
-/// The server has no authentication: whoever can reach the port can run inference. It bound
-/// `INADDR_ANY` while its log line said `localhost`, so it was reachable from every network the
-/// machine was on. These tests read the address back from the socket itself with `getsockname`,
+/// The server bound `INADDR_ANY` while its log line said `localhost`, so it was reachable from
+/// every network the machine was on. These tests read the address back from the socket itself with `getsockname`,
 /// because the address a caller asked for and the address a socket holds are different facts.
 @Suite("HTTP server bind address")
 struct HTTPServerBindTests {
 
     private static func makeServer(host: String? = nil) -> HTTPServer {
         guard let host else {
-            return HTTPServer(port: 0) { _, _, _ in }
+            return HTTPServer(port: 0, authentication: .unauthenticatedLoopback) { _, _, _ in }
         }
-        return HTTPServer(host: host, port: 0) { _, _, _ in }
+        return HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback) { _, _, _ in }
     }
 
     /// Connects a client socket to `host:port`, returning `connect(2)`'s result.

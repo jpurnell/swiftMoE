@@ -1,8 +1,11 @@
 # HANDOFF — SwiftMoE
 
-**Last session:** 2026-09-30 (fallback checker — see `project/summaries/2026-09-30_FallbackChecker.md`)
-**Branch:** `main` (commit `5fb88bc`)
-**State:** Green. Quality gate 0/0, 84 tests passing, nothing in progress.
+**Last session:** 2026-10-05 (server credential and CORS — see `project/summaries/2026-10-05_ServerCredentialAndCORS.md`)
+**Branch:** `fix/server-credential-and-cors` (PR open against `main`, not merged)
+**State:** Green. Quality gate 0/0, 166 tests passing, nothing in progress.
+
+`swift-moe-server` now requires a bearer key (`--api-key-file` or `SWIFT_MOE_API_KEY`), or
+`--no-auth` on loopback. A server started the old way refuses to start and says why.
 
 ---
 
@@ -12,8 +15,8 @@ The quality gate is clean at **0 errors / 0 warnings across all 45 checkers**, w
 overrides, suppressions, or config exclusions. Verified uncached:
 
 ```bash
-quality-gate --check all --no-cache    # 45/45, 0/0
-swift test                             # 84 tests, 22 suites
+quality-gate --check all --no-cache    # 46/46, 0/0
+swift test                             # 166 tests, 29 suites
 cd metal_infer && make                 # builds; 19 pre-existing warnings
 ```
 

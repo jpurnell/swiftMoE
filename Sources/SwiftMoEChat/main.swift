@@ -12,6 +12,10 @@ import CLineNoise
 //   flash-moe-chat --url http://localhost:8080
 //   flash-moe-chat --port 8080                   # Shorthand for localhost
 //   flash-moe-chat --resume <session_id>          # Resume previous session
+//   flash-moe-chat --api-key-file <path>          # Key the server requires
+//
+// The server requires a bearer key unless it was started with --no-auth. The key is read from
+// --api-key-file (a file only its owner can access) or the variable SWIFT_MOE_API_KEY.
 //
 // Commands:
 //   /quit, /exit    — Exit chat
@@ -20,6 +24,8 @@ import CLineNoise
 // ============================================================================
 
 private let logger = Logger(subsystem: "com.swiftmoe.chat", category: "main")
+/// The only status that carries an event stream.
+private let successStatus = 200
 private let allowedSchemes: Set<String> = ["http", "https"]
 private let allowedHosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
@@ -45,6 +51,7 @@ struct ChatConfig {
     var sessionID: String?
     var showThinking: Bool = false
     var maxTokens: Int = 500
+    var apiKeyFile: String?
 }
 
 func parseArgs() -> ChatConfig {
@@ -58,6 +65,7 @@ func parseArgs() -> ChatConfig {
         case "--resume": i += 1; if i < args.count { config.sessionID = args[i] }
         case "--show-think": config.showThinking = true
         case "--max-tokens": i += 1; if i < args.count { config.maxTokens = Int(args[i]) ?? 500 }
+        case "--api-key-file": i += 1; if i < args.count { config.apiKeyFile = args[i] }
         default: break
         }
         i += 1
@@ -78,7 +86,7 @@ func validateServerURL(_ urlString: String) -> URL? {
     return components.url
 }
 
-func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
+func sendChatRequest(url: String, prompt: String, maxTokens: Int, apiKey: APIKey?) {
     let body: [String: Any] = [
         "model": "flash-moe",
         "messages": [["role": "user", "content": prompt]],
@@ -104,6 +112,10 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
     request.timeoutInterval = deadline
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if let apiKey {
+        // `validateServerURL` admits loopback hosts only, so the key is never sent off the machine.
+        request.setValue(apiKey.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
+    }
     request.httpBody = jsonData
 
     let semaphore = DispatchSemaphore(value: 0)
@@ -119,6 +131,13 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
         guard let data = data,
               let text = String(data: data, encoding: .utf8) else {
             logger.error("No response data")
+            return
+        }
+
+        // A refusal is a JSON error, not an event stream; without this it would print nothing.
+        if let http = response as? HTTPURLResponse, http.statusCode != successStatus {
+            logger.error("Server refused the request: HTTP \(http.statusCode, privacy: .public)")
+            FileHandle.standardOutput.write(Data("[HTTP \(http.statusCode)] \(text)\n".utf8))
             return
         }
 
@@ -157,6 +176,15 @@ func sendChatRequest(url: String, prompt: String, maxTokens: Int) {
 
 func main() {
     let chatConfig = parseArgs()
+    let apiKey: APIKey?
+    do {
+        apiKey = try APIKey.load(keyFile: chatConfig.apiKeyFile,
+                                 environment: ProcessInfo.processInfo.environment)
+    } catch {
+        logger.error("API key: \(error.localizedDescription, privacy: .public)")
+        FileHandle.standardError.write(Data("swift-moe-chat: \(error.localizedDescription)\n".utf8))
+        return
+    }
     // The entry point is where the production generator is named: a new session's id is
     // drawn from the system generator, which is what makes it unguessable.
     var entropy = SystemRandomNumberGenerator()
@@ -164,7 +192,7 @@ func main() {
 
     logger.info("Flash-MoE Chat")
     logger.info("Server: \(chatConfig.serverURL, privacy: .public)")
-    logger.info("Session: \(session.sessionID, privacy: .public)")
+    logger.info("Session: \(session.sessionID, privacy: .private)")
     logger.info("Type /quit to exit, /sessions to list saved sessions")
 
     linenoiseSetMultiLine(1)
@@ -223,7 +251,8 @@ func main() {
         FileHandle.standardOutput.write(Data("Assistant> ".utf8))
         fflush(stdout)
 
-        sendChatRequest(url: chatConfig.serverURL, prompt: trimmed, maxTokens: chatConfig.maxTokens)
+        sendChatRequest(url: chatConfig.serverURL, prompt: trimmed, maxTokens: chatConfig.maxTokens,
+                        apiKey: apiKey)
 
         session.appendMessage(role: "assistant", content: "(streamed response)")
     }
