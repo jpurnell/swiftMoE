@@ -14,10 +14,10 @@ Based on the [Flash-MoE](https://github.com/danveloper/flash-moe) inference engi
 
 ### Key Differentiators
 - **Model-agnostic**: Runtime `ModelConfig` with presets — no hardcoded architecture constants
-- **Fully tested**: 105 tests with tiny synthetic model fixtures (no 210GB download needed)
+- **Fully tested**: 166 tests with tiny synthetic model fixtures (no 210GB download needed)
 - **All GPU paths**: 7 GPU optimization paths with automatic CPU fallback
 - **Pure Swift**: No C dependencies in the main library
-- **OpenAI-compatible**: `/v1/chat/completions` HTTP server with SSE streaming
+- **OpenAI-compatible**: `/v1/chat/completions` HTTP server with SSE streaming and bearer-key authentication
 
 ---
 
@@ -44,10 +44,12 @@ SwiftMoE/
 │   ├── Attention/     FullAttention, LinearAttention, RMSNorm, RoPE, Softmax, BFloat16
 │   ├── Inference/     LayerPipeline, TokenGenerator, DeferredExpertState, KVCache,
 │   │                  LinearAttentionState, TopK, Embedding, LayerWeightCache, BPETokenizer
-│   └── Server/        HTTPServer, SSEWriter, SessionStore
+│   └── Server/        HTTPServer, APIKey (+ BearerCredential, HTTPServerError),
+│                      HTTPConnection, HTTPRequestHead, HTTPRefusal, ClientConnection,
+│                      SSEWriter, SessionStore
 ├── Sources/SwiftMoEServer/   HTTP server executable
 ├── Sources/SwiftMoEChat/     Interactive TUI executable
-├── Tests/SwiftMoETests/      105 tests, 26 suites
+├── Tests/SwiftMoETests/      166 tests, 29 suites
 └── metal_infer/              Original Obj-C reference implementation
 ```
 
@@ -68,7 +70,11 @@ SwiftMoE/
 - [x] Token generation loop (embed → 60 layers → norm → lm_head → argmax)
 - [x] BPE tokenizer (pure Swift, binary format compatible)
 - [x] HTTP server with SSE streaming (OpenAI-compatible) — binds loopback by default;
-      a wider bind is an explicit `host`. Still unauthenticated (see Remaining)
+      a wider bind is an explicit `host`
+- [x] HTTP server access control: bearer credential (required off loopback; `--no-auth` on
+      loopback only), origin allowlist in place of `Access-Control-Allow-Origin: *`, `Host`
+      check on loopback, a ceiling on `max_tokens`, header/body/time limits, exact routing,
+      and a thread per connection so one silent client cannot stop the server
 - [x] Chat TUI with session persistence
 - [x] Runtime ModelConfig with presets (.qwen397B, .tiny)
 - [x] Synthetic test fixtures (SyntheticFixtures + ModelConfig.tiny)
@@ -80,8 +86,16 @@ SwiftMoE/
 - [ ] Performance benchmarking against original C engine
 - [ ] DocC documentation generation
 - [ ] Additional model presets (DeepSeek-V3, Mixtral)
-- [ ] HTTP server: authentication (bearer token), a restricted CORS origin instead of `*`,
-      a read deadline, and a cap on `max_tokens` — none exist; loopback is the only control
+- [x] ~~HTTP server: authentication (bearer token), a restricted CORS origin instead of `*`,
+      a read deadline, and a cap on `max_tokens` — none exist; loopback is the only control~~
+      Shipped 2026-10-05 on `fix/server-credential-and-cors`; see Current Status.
+- [ ] HTTP server: TLS. The bearer key crosses the network in clear text, so a non-loopback
+      bind needs a TLS-terminating proxy in front of it
+- [ ] HTTP server: a prompt-length budget. The body is capped at 64 KiB, but the placeholder
+      tokenizer makes that up to 65,536 prompt tokens against KV caches of 8,192 positions;
+      the cap belongs with the real tokenizer (`--model` mode), which does not exist yet
+- [ ] HTTP server: a validated request queues behind the running inference with no deadline
+      of its own, holding one of the 16 connection slots for as long as that takes
 
 ---
 
@@ -89,15 +103,15 @@ SwiftMoE/
 
 - Zero compiler warnings
 - Quality gate clean at 0 errors / 0 warnings across all 45 checkers, no overrides
-- 105 tests, all passing
+- 166 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-10-03 — reconciled after the listener-defaults fix: the HTTP server
-binds loopback by default and session ids come from a generator rather than `UUID()`. Test
-count 91 → 105 and suites 23 → 26 (both were already stale: main ran 95 tests in 24 suites); the Overview and Module
-Structure counts, which still said 82/21, are corrected too. The server's missing
-authentication is recorded under Remaining rather than left implied.
+**Last Updated:** 2026-10-05 — reconciled after the server credential and CORS fix: the
+"HTTP server: authentication…" item under Remaining shipped and is struck through there and
+recorded under Current Status; three things it leaves open (TLS, a prompt-length budget, queued
+requests) are added to Remaining. Test count 105 → 166 and suites 26 → 29 in the Overview,
+Module Structure and Quality Standards; the Server row of Module Structure lists the new files.

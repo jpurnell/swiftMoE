@@ -11,9 +11,9 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 - **Full + Linear Attention** -- GQA with RoPE (full) and BLAS-accelerated GatedDeltaNet (linear)
 - **2-bit/4-bit Quantization** -- Quantization-aware buffer sizing saves ~64MB in 2-bit mode
 - **Runtime Configurable** -- `ModelConfig` presets for any MoE architecture (Qwen, DeepSeek, etc.)
-- **OpenAI-Compatible Server** -- `/v1/chat/completions` with SSE streaming
+- **OpenAI-Compatible Server** -- `/v1/chat/completions` with SSE streaming, bearer-key authentication
 - **Pure Swift** -- No Python, no ML frameworks, no C dependencies (except optional linenoise for TUI)
-- **105 Tests** -- Full TDD coverage with tiny synthetic model fixtures
+- **166 Tests** -- Full TDD coverage with tiny synthetic model fixtures
 
 ## Quick Start
 
@@ -22,10 +22,12 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 swift build
 
 # Run demo server (synthetic tiny model, no download needed)
-swift run swift-moe-server --demo --port 8080
+umask 077 && openssl rand -hex 32 > ~/.swift-moe-key
+swift run swift-moe-server --demo --port 8080 --api-key-file ~/.swift-moe-key
 
 # In another terminal:
 curl -N -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat ~/.swift-moe-key)" \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
 
@@ -33,20 +35,50 @@ curl -N -X POST http://localhost:8080/v1/chat/completions \
 swift test
 ```
 
-### The server is unauthenticated, and binds loopback
+### The server requires a key
 
-`swift-moe-server` has no authentication: anything that can connect to the port can run
-inference. It therefore listens on `127.0.0.1` only, and logs the address it actually bound.
-To reach it from another machine, say so:
+Every request must carry `Authorization: Bearer <key>`; without it the answer is
+`401 Unauthorized`. The server reads the key from a file or from the environment — never from
+the command line, where `ps` would show it — and will not start without one:
 
 ```bash
-swift run swift-moe-server --demo --host 0.0.0.0 --port 8080   # every interface, no auth
+umask 077 && openssl rand -hex 32 > ~/.swift-moe-key          # 64 characters; minimum is 32
+swift run swift-moe-server --demo --api-key-file ~/.swift-moe-key
+# or: SWIFT_MOE_API_KEY=$(cat ~/.swift-moe-key) swift run swift-moe-server --demo
+swift run swift-moe-chat --api-key-file ~/.swift-moe-key
 ```
 
-Do that only on a network you trust, or keep it on loopback behind a reverse proxy that
-authenticates. `--host` takes an IPv4 address; host names are refused rather than resolved.
-The same default applies to the library: `HTTPServer(port:handler:)` is loopback, and
-`HTTPServer(host:port:handler:)` is the explicit form.
+The key file must not be readable, writable or executable by group or other (`chmod 600`).
+
+| Situation | What happens |
+|---|---|
+| Key configured | Bearer authentication, on any `--host` |
+| No key, loopback, `--no-auth` | Starts unauthenticated, with a warning in the log |
+| No key, loopback, no flag | Refuses to start |
+| No key, any other `--host` | Refuses to start; `--no-auth` does not change this |
+| Key and `--no-auth` | Refuses to start: a contradiction |
+
+It listens on `127.0.0.1` unless `--host <ipv4>` says otherwise. The key crosses the network in
+clear text, so off loopback put TLS in front of it.
+
+**Browsers.** No CORS headers are sent, and a request carrying an `Origin` is refused (`403`),
+unless the origin was allowed: `--allow-origin http://localhost:3000` (repeatable, compared
+exactly). On loopback the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`
+(`421` otherwise), which stops DNS rebinding.
+
+**Limits.** A request outside these is refused with a status and a sentence, not trimmed:
+
+| Limit | Default | Over it |
+|---|---|---|
+| `max_tokens` / `max_completion_tokens` | whole number, 1…8192 | `400` |
+| Request body | 64 KiB | `413` |
+| Request line and headers | 16 KiB | `431` |
+| Time to send the whole request | 10 s | `408` |
+| Connections being read at once | 16 | `503` |
+
+8192 is the number of positions the KV caches are allocated for
+(`TokenGenerator.defaultMaxSequenceLength`). Library users set these with `HTTPServer.Limits`
+and create the server with `HTTPServer(port:authentication:allowedOrigins:limits:handler:)`.
 
 ## Architecture
 
@@ -65,11 +97,12 @@ SwiftMoE/
       Inference/      LayerPipeline, TokenGenerator, DeferredExpertState,
                       KVCache, LinearAttentionState, TopK, Embedding,
                       LayerWeightCache, BPETokenizer
-      Server/         HTTPServer, SSEWriter, SessionStore
+      Server/         HTTPServer, APIKey, HTTPConnection, HTTPRequestHead,
+                      HTTPRefusal, ClientConnection, SSEWriter, SessionStore
     SwiftMoEServer/   Executable: OpenAI-compatible HTTP server
     SwiftMoEChat/     Executable: Interactive TUI chat client
   Tests/
-    SwiftMoETests/    105 tests across 26 suites (0.5s)
+    SwiftMoETests/    166 tests across 29 suites (2s)
   metal_infer/        Original Obj-C/Metal reference implementation
 ```
 
