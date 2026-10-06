@@ -12,6 +12,8 @@ import Foundation
 public struct SSEWriter {
     private let fileDescriptor: Int32
     private let requestID: String
+    /// Header lines the server adds for this request — the CORS headers for an allowed origin.
+    private let extraHeaders: [String]
 
     /// Creates an SSE writer for a client connection.
     ///
@@ -19,22 +21,34 @@ public struct SSEWriter {
     ///   - fileDescriptor: The client socket fd to write to.
     ///   - requestID: Unique request ID for the SSE events.
     public init(fileDescriptor: Int32, requestID: String = UUID().uuidString) {
+        self.init(fileDescriptor: fileDescriptor, requestID: requestID, extraHeaders: [])
+    }
+
+    /// Creates an SSE writer whose response carries further header lines.
+    ///
+    /// - Parameters:
+    ///   - fileDescriptor: The client socket fd to write to.
+    ///   - requestID: Unique request ID for the SSE events.
+    ///   - extraHeaders: Header lines, without line endings, sent after the fixed ones.
+    init(fileDescriptor: Int32, requestID: String = UUID().uuidString, extraHeaders: [String]) {
         self.fileDescriptor = fileDescriptor
         self.requestID = requestID
+        self.extraHeaders = extraHeaders
     }
 
     /// Sends the HTTP response headers for an SSE stream.
+    ///
+    /// No `Access-Control-Allow-Origin` is sent unless the request came from an origin on the
+    /// server's allowlist, in which case that one origin is echoed. There is no wildcard.
     public func sendHeaders() {
-        let headers = """
-        HTTP/1.1 200 OK\r
-        Content-Type: text/event-stream\r
-        Cache-Control: no-cache\r
-        Connection: close\r
-        Access-Control-Allow-Origin: *\r
-        \r
-
-        """
-        writeString(headers)
+        var lines = [
+            "HTTP/1.1 200 OK",
+            "Content-Type: text/event-stream",
+            "Cache-Control: no-cache",
+            "Connection: close",
+        ]
+        lines.append(contentsOf: extraHeaders)
+        writeString(lines.joined(separator: "\r\n") + "\r\n\r\n")
     }
 
     /// Sends a single token as an SSE delta event.

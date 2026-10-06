@@ -8,11 +8,21 @@ import SwiftMoE
 // flash-moe-server — OpenAI-compatible HTTP server with SSE streaming
 //
 // Usage:
-//   flash-moe-server --model <path> [--host 127.0.0.1] [--port 8080] [--k 4] [--2bit] [--timing]
-//   flash-moe-server --demo [--port 8080]     # Run with tiny synthetic model
+//   swift-moe-server --demo [--host 127.0.0.1] [--port 8080] [--api-key-file <path>]
+//                    [--allow-origin <origin>]... [--no-auth] [--k 4] [--2bit] [--timing]
 //
-// The server has no authentication. It binds loopback unless --host names another
-// IPv4 address; --host 0.0.0.0 publishes it to every network the machine is on.
+// Authentication:
+//   Every request must carry `Authorization: Bearer <key>`. The key is read from the file
+//   named by --api-key-file (which must not be accessible to group or other), or else from
+//   the environment variable SWIFT_MOE_API_KEY. It is never taken from the command line,
+//   where `ps` would show it, and never logged.
+//
+//   Without a key the server does not start. --no-auth starts it without one on a loopback
+//   address only; on any other address a key is required and --no-auth is refused.
+//
+// Browsers:
+//   No CORS headers are sent, and a request carrying an Origin is refused, unless that origin
+//   was named with --allow-origin (repeatable), e.g. --allow-origin http://localhost:3000.
 //
 // API:
 //   POST /v1/chat/completions  (OpenAI chat format, SSE response)
@@ -29,9 +39,12 @@ struct ServerConfig {
     var timing: Bool = false
     var demo: Bool = false
     var shaderPath: String = "metal_infer/shaders.metal"
+    var apiKeyFile: String?
+    var noAuth: Bool = false
+    var allowedOrigins: [String] = []
 }
 
-func parseArgs() -> ServerConfig {
+func parseArgs() throws -> ServerConfig {
     var config = ServerConfig()
     var i = 1
     let args = CommandLine.arguments
@@ -45,6 +58,17 @@ func parseArgs() -> ServerConfig {
         case "--timing": config.timing = true
         case "--demo": config.demo = true
         case "--shaders": i += 1; if i < args.count { config.shaderPath = args[i] }
+        case "--api-key-file", "--allow-origin":
+            // A security option with its value missing is an error, not an option to skip.
+            let option = args[i]
+            i += 1
+            guard i < args.count else { throw HTTPServerError.missingValue(option: option) }
+            if option == "--api-key-file" {
+                config.apiKeyFile = args[i]
+            } else {
+                config.allowedOrigins.append(args[i])
+            }
+        case "--no-auth": config.noAuth = true
         default: break
         }
         i += 1
@@ -53,7 +77,16 @@ func parseArgs() -> ServerConfig {
 }
 
 func main() throws {
-    let serverConfig = parseArgs()
+    let serverConfig = try parseArgs()
+
+    // Decide who may call the server before anything expensive is built, so a server that
+    // may not listen fails in the first millisecond rather than after the model is loaded.
+    let authentication = try HTTPServer.Authentication.resolve(
+        host: serverConfig.host,
+        keyFile: serverConfig.apiKeyFile,
+        environment: ProcessInfo.processInfo.environment,
+        noAuth: serverConfig.noAuth
+    )
 
     let modelConfig: ModelConfig
     let weightFile: WeightFile
@@ -182,7 +215,12 @@ func main() throws {
     logger.info("[server] Config: \(modelConfig.numLayers, privacy: .public) layers, \(modelConfig.numExperts, privacy: .public) experts, K=\(serverConfig.activeExperts, privacy: .public)")
 
     // ---- Start HTTP server ----
-    let server = HTTPServer(host: serverConfig.host, port: serverConfig.port) { prompt, maxTokens, writer in
+    let server = HTTPServer(
+        host: serverConfig.host,
+        port: serverConfig.port,
+        authentication: authentication,
+        allowedOrigins: serverConfig.allowedOrigins
+    ) { prompt, maxTokens, writer in
         logger.info("[request] prompt=\(prompt.prefix(80), privacy: .private)... maxTokens=\(maxTokens, privacy: .public)")
 
         writer.sendHeaders()
@@ -227,4 +265,11 @@ func main() throws {
     }
 }
 
-try main()
+do {
+    try main()
+} catch {
+    logger.error("[server] \(error.localizedDescription, privacy: .public)")
+    FileHandle.standardError.write(Data("swift-moe-server: \(error.localizedDescription)\n".utf8))
+    // A refusal to start is an ordinary failure with a sentence attached, not a trap.
+    exit(EXIT_FAILURE)
+}

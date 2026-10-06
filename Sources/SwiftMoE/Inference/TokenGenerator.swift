@@ -39,14 +39,25 @@ public final class TokenGenerator {
     /// Hidden state vector [HIDDEN_DIM].
     private var hidden: [Float]
 
+    /// Positions the KV caches are allocated for unless a caller asks otherwise: 8192.
+    ///
+    /// This is `GPU_KV_SEQ` in `infer.m` — the GPU KV buffers are pre-allocated for this many
+    /// positions, and ``KVCache`` stops recording past its allocation rather than growing. A
+    /// sequence longer than this is therefore attended to incompletely, which makes it the
+    /// longest generation worth asking for; ``HTTPServer/Limits/maxCompletionTokens`` defaults
+    /// to it.
+    public static let defaultMaxSequenceLength = 8192
+
     /// Creates a token generator with the given Metal context.
     ///
     /// - Parameters:
     ///   - context: Initialized Metal context with compiled shaders.
     ///   - config: Model configuration providing dimensions and layer layout.
     ///   - activeExperts: Number of experts per token (default 4).
-    ///   - maxSeqLen: Maximum sequence length for KV caches.
-    public init(context: MetalContext, config: ModelConfig, activeExperts: Int = 4, maxSeqLen: Int = 8192) {
+    ///   - maxSeqLen: Maximum sequence length for KV caches (default
+    ///     ``defaultMaxSequenceLength``).
+    public init(context: MetalContext, config: ModelConfig, activeExperts: Int = 4,
+                maxSeqLen: Int = TokenGenerator.defaultMaxSequenceLength) {
         self.context = context
         self.config = config
         self.pipeline = LayerPipeline(context: context, config: config)
