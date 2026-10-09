@@ -40,11 +40,24 @@ inference, so that is what it guards:
 - **Limits.** ``HTTPServer/Limits`` caps tokens per request (8192,
   ``TokenGenerator/defaultMaxSequenceLength``), header and body size, and the time a client may
   take. A request over a limit is refused with a status and a sentence; nothing is clamped.
+- **Sequence.** The server is given an ``HTTPServer/Tokenizer`` and counts the prompt with it.
+  Prompt tokens plus requested completion tokens must fit in
+  ``HTTPServer/Limits/maxSequenceTokens``, or the request is refused with a `400` that gives
+  the numbers. The handler receives the counted tokens in an ``HTTPServer/Request``. Beneath
+  that, ``KVCache`` throws ``FlashMoEError/sequenceCapacityExceeded(capacity:required:)``
+  rather than record nothing once it is full, so a sequence can be refused but never quietly
+  truncated.
+- **Transport.** The server speaks plain HTTP. ``HTTPServer/openListener()`` refuses any
+  address outside `127.0.0.0/8` unless the server was created with `allowPlaintext: true`,
+  which states that a TLS-terminating proxy fronts the port.
 
 The listener binds `127.0.0.1` unless a caller names another address, and
 ``HTTPServer/openListener()`` returns the address the socket actually holds. Connections are
-read concurrently; the handler runs one request at a time. ``HTTPServerError`` describes every
-reason a server refuses to start.
+read concurrently; the handler runs one request at a time. A request that arrives meanwhile
+waits its turn for at most ``HTTPServer/Limits/queueDeadline`` and is then answered `503` with
+`Retry-After`. A client that disconnects gives up its place, and
+``SSEWriter/clientHasDisconnected`` lets a handler stop generating for a client that has gone.
+``HTTPServerError`` describes every reason a server refuses to start.
 
 ``SessionStore`` names conversation files by an id drawn from a
 `RandomNumberGenerator` — 32 bytes, hex — rather than a UUID.
