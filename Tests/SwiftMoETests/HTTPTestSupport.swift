@@ -195,6 +195,11 @@ struct ClientSocket {
 
     let descriptor: Int32
 
+    /// Wraps a socket that is already connected.
+    init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
     init(port: UInt16) throws {
         let address = try #require(HTTPServer.ipv4Address(HTTPServer.loopbackHost))
         let fd = socket(AF_INET, SOCK_STREAM, 0)

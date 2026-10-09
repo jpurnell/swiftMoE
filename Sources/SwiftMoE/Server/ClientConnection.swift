@@ -88,6 +88,15 @@ struct ClientConnection {
     /// - Returns: `true` when every byte was written.
     @discardableResult
     func write(_ bytes: [UInt8]) -> Bool {
+        Self.write(bytes, to: descriptor)
+    }
+
+    /// Writes all of `bytes` to `descriptor`, or as much as the peer accepts before failing.
+    ///
+    /// An interrupted call is retried; any other failure, or a write timeout, ends it.
+    ///
+    /// - Returns: `true` when every byte was written.
+    static func write(_ bytes: [UInt8], to descriptor: Int32) -> Bool {
         var sent = 0
         while sent < bytes.count {
             let written = bytes[sent...].withUnsafeBufferPointer { buffer -> Int in
