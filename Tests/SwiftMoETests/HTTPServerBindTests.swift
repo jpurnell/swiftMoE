@@ -12,9 +12,9 @@ struct HTTPServerBindTests {
 
     private static func makeServer(host: String? = nil) -> HTTPServer {
         guard let host else {
-            return HTTPServer(port: 0, authentication: .unauthenticatedLoopback) { _, _, _ in }
+            return HTTPServer(port: 0, authentication: .unauthenticatedLoopback, tokenizer: RunningServer.byteTokenizer) { _, _ in }
         }
-        return HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback) { _, _, _ in }
+        return HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback, tokenizer: RunningServer.byteTokenizer) { _, _ in }
     }
 
     /// Connects a client socket to `host:port`, returning `connect(2)`'s result.

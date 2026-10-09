@@ -5,6 +5,21 @@ import os
 
 private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 
+/// Something that happened to a connection, reported to an ``HTTPServerObserver``.
+enum HTTPServerEvent: Hashable, CaseIterable, Sendable {
+    /// A validated request found the model busy and began to wait.
+    case requestQueued
+    /// A waiting request's client went away; the request was dropped without running.
+    case queuedRequestAbandoned
+    /// A waiting request's deadline passed; it was answered 503.
+    case queuedRequestTimedOut
+    /// A connection was closed and its slot released.
+    case connectionFinished
+}
+
+/// Receives ``HTTPServerEvent``s.
+typealias HTTPServerObserver = @Sendable (HTTPServerEvent) -> Void
+
 /// Minimal HTTP server for OpenAI-compatible chat completions with SSE streaming.
 ///
 /// Listens on a TCP port and answers `POST /v1/chat/completions`, streaming tokens as
@@ -18,6 +33,9 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 ///   ``Authentication/bearer(_:)`` requires `Authorization: Bearer <key>` on every request and
 ///   answers 401 otherwise. ``Authentication/unauthenticatedLoopback`` checks nothing, and
 ///   ``openListener()`` refuses it for any address that is not loopback.
+/// - **Transport.** The server speaks plain HTTP and nothing else. ``openListener()`` refuses
+///   an address other machines can reach unless the server was created with
+///   `allowPlaintext: true`, which says a TLS-terminating proxy stands in front of it.
 /// - **Origin.** No CORS header is sent unless an origin is on `allowedOrigins`, and a request
 ///   carrying any other `Origin` is refused. Loopback does not keep a web page out — the
 ///   browser is on loopback too — so this is what does.
@@ -27,7 +45,11 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 ///
 /// ```swift
 /// let key = try APIKey(String(repeating: "k", count: 32))
-/// let server = HTTPServer(port: 8080, authentication: .bearer(BearerCredential(key: key))) { prompt, maxTokens, writer in
+/// let server = HTTPServer(
+///     port: 8080,
+///     authentication: .bearer(BearerCredential(key: key)),
+///     tokenizer: { prompt in prompt.utf8.map(Int.init) }
+/// ) { request, writer in
 ///     writer.sendHeaders()
 ///     writer.sendDone()
 /// }
@@ -37,7 +59,10 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 ///
 /// ## Concurrency
 /// Connections are read on a bounded pool, so a client that is slow or silent delays nobody
-/// else; the handler is called for one request at a time.
+/// else; the handler is called for one request at a time. A request that arrives while
+/// another is running waits its turn, in arrival order, for at most
+/// ``Limits/queueDeadline``; after that it is answered 503 with `Retry-After`. A request
+/// whose client hangs up while it waits is dropped without running.
 ///
 /// ## Protocol
 /// - **Endpoint:** `POST /v1/chat/completions`
@@ -82,10 +107,45 @@ public final class HTTPServer: Sendable {
     /// Port to listen on. `0` asks the kernel for a free port; see ``boundAddress``.
     public let port: UInt16
 
-    /// Called for each incoming chat request. Return the prompt string.
+    /// A chat-completions request that passed every check, as the handler receives it.
+    public struct Request: Equatable, Sendable {
+        /// Content of the last message, or `""` when there is none.
+        public let prompt: String
+        /// ``prompt`` as the server's ``Tokenizer`` split it. These are the tokens the sequence
+        /// budget was checked against, so they are the ones to generate from.
+        public let promptTokens: [Int]
+        /// Tokens to generate: within ``Limits/maxCompletionTokens``, and, added to
+        /// ``promptTokens``, within ``Limits/maxSequenceTokens``.
+        public let maxTokens: Int
+
+        /// Creates a request.
+        ///
+        /// - Parameters:
+        ///   - prompt: Content of the last message.
+        ///   - promptTokens: The prompt's tokens.
+        ///   - maxTokens: Tokens to generate.
+        public init(prompt: String, promptTokens: [Int], maxTokens: Int) {
+            self.prompt = prompt
+            self.promptTokens = promptTokens
+            self.maxTokens = maxTokens
+        }
+    }
+
+    /// Splits a prompt into the tokens the model will be given.
+    ///
+    /// The server calls it once per request, on the connection's own thread and possibly for
+    /// several requests at once, before the request waits for the model. It decides how long
+    /// a prompt is, which is why it is the server's and not the handler's: a length checked
+    /// with one tokenizer and generated with another is not checked.
+    public typealias Tokenizer = @Sendable (_ prompt: String) -> [Int]
+
+    /// Called for each chat request that passed every check, one call at a time.
+    ///
+    /// A handler should stop generating once ``SSEWriter/clientHasDisconnected`` is `true` or
+    /// a write returns `false`. The server cannot interrupt a handler, and one that carries on
+    /// for a client that has left keeps every other request waiting for work nobody will read.
     public typealias RequestHandler = (
-        _ prompt: String,
-        _ maxTokens: Int,
+        _ request: Request,
         _ sseWriter: SSEWriter
     ) -> Void
 
@@ -97,6 +157,9 @@ public final class HTTPServer: Sendable {
 
     /// Bounds on a request and a connection.
     public let limits: Limits
+
+    /// Whether the operator has said that something else encrypts this listener's traffic.
+    public let allowsPlaintext: Bool
 
     /// The listening socket and the accept loop's progress, guarded together.
     private struct State {
@@ -111,6 +174,7 @@ public final class HTTPServer: Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let observer: HTTPServerObserver?
     private let processor: HTTPConnectionProcessor
     /// One permit per connection being served.
     private let connectionSlots: DispatchSemaphore
@@ -131,16 +195,45 @@ public final class HTTPServer: Sendable {
     ///   - authentication: How callers are authenticated. Deliberately without a default.
     ///   - allowedOrigins: Origins, as `scheme://host[:port]`, whose pages may call the server.
     ///   - limits: Bounds on a request and a connection.
+    ///   - allowPlaintext: States that a TLS-terminating proxy on the same trust boundary
+    ///     fronts this port. Required to bind anything but loopback; see
+    ///     ``requirePlaintextAcknowledged(host:allowPlaintext:)``.
+    ///   - tokenizer: Splits a prompt into tokens. Deliberately without a default: the
+    ///     sequence budget is only as true as the count it is given.
     ///   - handler: Callback invoked for each chat completion request, one at a time, on a
     ///     background thread.
-    public init(
+    public convenience init(
         host: String = HTTPServer.loopbackHost,
         port: UInt16 = 8080,
         authentication: Authentication,
         allowedOrigins: [String] = [],
         limits: Limits = Limits(),
+        allowPlaintext: Bool = false,
+        tokenizer: @escaping Tokenizer,
         handler: @escaping RequestHandler
     ) {
+        self.init(host: host, port: port, authentication: authentication, allowedOrigins: allowedOrigins,
+                  limits: limits, allowPlaintext: allowPlaintext, tokenizer: tokenizer, observer: nil,
+                  handler: handler)
+    }
+
+    /// Creates an HTTP server that reports what happens to its connections.
+    ///
+    /// - Parameter observer: Called, on whichever thread the event happens, for each
+    ///   ``HTTPServerEvent``. Tests wait on these instead of on the clock.
+    init(
+        host: String,
+        port: UInt16,
+        authentication: Authentication,
+        allowedOrigins: [String],
+        limits: Limits,
+        allowPlaintext: Bool,
+        tokenizer: @escaping Tokenizer,
+        observer: HTTPServerObserver?,
+        handler: @escaping RequestHandler
+    ) {
+        self.allowsPlaintext = allowPlaintext
+        self.observer = observer
         self.host = host
         self.port = port
         self.authentication = authentication
@@ -150,6 +243,8 @@ public final class HTTPServer: Sendable {
             authentication: authentication,
             allowedOrigins: allowedOrigins,
             limits: limits,
+            tokenizer: tokenizer,
+            observer: observer,
             handler: SerializedHandler(handler)
         )
         self.connectionSlots = DispatchSemaphore(value: max(0, limits.maxConnections))
@@ -185,6 +280,25 @@ public final class HTTPServer: Sendable {
         return UInt32(bigEndian: address) >> 24 == Self.loopbackNetwork
     }
 
+    /// Refuses a plain-text listener that other machines can reach, unless that was asked for.
+    ///
+    /// This server does not speak TLS. On loopback that exposes nothing. Anywhere else the
+    /// bearer key and every prompt and completion cross the network readable, so the bind is
+    /// refused unless the operator states — `--allow-plaintext` — that a TLS-terminating
+    /// proxy on the same trust boundary fronts the port. The statement encrypts nothing; it
+    /// records that the hop from that proxy to here is one the operator trusts.
+    ///
+    /// - Parameters:
+    ///   - host: The address the listener will bind.
+    ///   - allowPlaintext: Whether the operator has acknowledged the exposure.
+    /// - Throws: ``HTTPServerError/plaintextNotAcknowledged(host:)`` when `host` is not in
+    ///   `127.0.0.0/8` and `allowPlaintext` is `false`.
+    public static func requirePlaintextAcknowledged(host: String, allowPlaintext: Bool) throws {
+        guard isLoopback(host) || allowPlaintext else {
+            throw HTTPServerError.plaintextNotAcknowledged(host: host)
+        }
+    }
+
     /// First octet of the IPv4 loopback block (RFC 1122 §3.2.1.3).
     private static let loopbackNetwork: UInt32 = 127
 
@@ -200,6 +314,8 @@ public final class HTTPServer: Sendable {
     /// - Throws: ``FlashMoEError/invalidBindAddress(host:)`` when ``host`` is not an IPv4
     ///   literal; ``HTTPServerError/credentialRequired(host:)`` when ``host`` is not loopback
     ///   and ``authentication`` is ``Authentication/unauthenticatedLoopback``;
+    ///   ``HTTPServerError/plaintextNotAcknowledged(host:)`` when ``host`` is not loopback and
+    ///   ``allowsPlaintext`` is `false`;
     ///   ``HTTPServerError/invalidOrigin(_:)`` and ``HTTPServerError/invalidLimit(name:)`` for
     ///   a bad allowlist entry or limit; ``FlashMoEError/readFailed(errno:context:)`` when a
     ///   socket call fails.
@@ -213,6 +329,7 @@ public final class HTTPServer: Sendable {
         if case .unauthenticatedLoopback = authentication, !Self.isLoopback(host) {
             throw HTTPServerError.credentialRequired(host: host)
         }
+        try Self.requirePlaintextAcknowledged(host: host, allowPlaintext: allowsPlaintext)
         for origin in allowedOrigins where !Self.isOrigin(origin) {
             throw HTTPServerError.invalidOrigin(origin)
         }
@@ -285,7 +402,7 @@ public final class HTTPServer: Sendable {
             logger.warning("[server] Running WITHOUT authentication on \(bound.host, privacy: .public): any local process can run inference.")
         }
         if !Self.isLoopback(bound.host) {
-            logger.warning("[server] Bound to \(bound.host, privacy: .public), which is not loopback: the bearer key travels in clear text unless TLS is terminated in front of this server.")
+            logger.warning("[server] Bound to \(bound.host, privacy: .public) in plain text, as acknowledged (--allow-plaintext): the bearer key, prompts and completions are unencrypted between the TLS-terminating proxy and this port.")
         }
 
         while !state.withLock({ $0.stopRequested }) {
@@ -309,11 +426,13 @@ public final class HTTPServer: Sendable {
     /// the threads at twice ``Limits/maxConnections``.
     private func dispatch(_ clientFD: Int32, bound: BoundAddress) {
         let processor = self.processor
+        let observer = self.observer
         if connectionSlots.wait(timeout: .now()) == .success {
             let slots = connectionSlots
             Thread.detachNewThread {
                 processor.serve(clientFD, bound: bound)
                 slots.signal()
+                observer?(.connectionFinished)
             }
         } else if refusalSlots.wait(timeout: .now()) == .success {
             let slots = refusalSlots

@@ -41,10 +41,10 @@ private let pipelineLogger = Logger(subsystem: "com.swiftmoe", category: "pipeli
 /// ```swift
 /// let pipeline = LayerPipeline(context: metalCtx, config: config)
 /// for layer in 0..<config.numLayers {
-///     pipeline.forward(layerIndex: layer, hidden: hidden, weights: weights,
-///                      kvCache: &kvCache, linearState: &linearState,
-///                      position: position, K: topK, expertFD: expertFD,
-///                      use2Bit: false, layerWeights: layerWeights)
+///     try pipeline.forward(layerIndex: layer, hidden: hidden, weights: weights,
+///                          kvCache: &kvCache, linearState: &linearState,
+///                          position: position, K: topK, expertFD: expertFD,
+///                          use2Bit: false, layerWeights: layerWeights)
 /// }
 /// pipeline.completeDeferredExperts(hidden: hidden)  // finalize last layer
 /// ```
@@ -119,7 +119,7 @@ public final class LayerPipeline {
         expertFD: Int32,
         use2Bit: Bool,
         layerWeights: [LayerWeightPointers]
-    ) {
+    ) throws {
         let hiddenDim = config.hiddenDim
         let hiddenBytes = hiddenDim * MemoryLayout<Float>.size
         let isFull = config.isFullAttention(layer: layerIndex)
@@ -241,9 +241,9 @@ public final class LayerPipeline {
                 context: context, config: config, kvCacheLength: kv.length + 1, layerIndex: layerIndex)
 
             if useGPUAttn {
-                attnOut.withUnsafeMutableBufferPointer { outBuf in
+                try attnOut.withUnsafeMutableBufferPointer { outBuf in
                     guard let outBase = outBuf.baseAddress else { return }
-                    FullAttention.forward(
+                    try FullAttention.forward(
                         qProjOut: &qProjOut, kOut: &kOut, vOut: &vOut,
                         kvCache: &kv, position: position, config: config,
                         qNormW: weights.qNormW, kNormW: weights.kNormW,
@@ -253,9 +253,9 @@ public final class LayerPipeline {
                        config.numAttentionHeads * config.headDim * MemoryLayout<Float>.size)
                 gpuFullAttnUsed = true
             } else {
-                attnOut.withUnsafeMutableBufferPointer { outBuf in
+                try attnOut.withUnsafeMutableBufferPointer { outBuf in
                     guard let outBase = outBuf.baseAddress else { return }
-                    FullAttention.forward(
+                    try FullAttention.forward(
                         qProjOut: &qProjOut, kOut: &kOut, vOut: &vOut,
                         kvCache: &kv, position: position, config: config,
                         qNormW: weights.qNormW, kNormW: weights.kNormW,

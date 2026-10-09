@@ -1,35 +1,61 @@
 # HANDOFF — SwiftMoE
 
-**Last session:** 2026-10-05 (server credential and CORS — see `project/summaries/2026-10-05_ServerCredentialAndCORS.md`)
-**Branch:** `fix/server-credential-and-cors` (PR open against `main`, not merged)
-**State:** Green. Quality gate 0/0, 166 tests passing, nothing in progress.
+**Last session:** 2026-10-09 (bounded work, and preparation for the first tag — see `project/summaries/2026-10-09_BoundedWork.md`)
+**Branch:** `fix/bounded-work` (PR open against `main`, not merged, not tagged)
+**State:** Green. Quality gate 0/0, 226 tests passing, nothing in progress.
 
-`swift-moe-server` now requires a bearer key (`--api-key-file` or `SWIFT_MOE_API_KEY`), or
-`--no-auth` on loopback. A server started the old way refuses to start and says why.
+`swift-moe-server` now refuses a prompt that does not fit in a sequence (400), gives a queued
+request 30 s to start (503 + `Retry-After`), stops generating for a client that has left, and
+will not bind anything but loopback without `--allow-plaintext`. The inference layer throws
+instead of dropping context.
+
+**The next thing to do is tag 0.1.0**, once the PR is merged. The summary lists exactly what
+the tagging commit has to change.
 
 ---
 
 ## Where things stand
 
-The quality gate is clean at **0 errors / 0 warnings across all 45 checkers**, with no
-overrides, suppressions, or config exclusions. Verified uncached:
+The quality gate is clean at **0 errors / 0 warnings**, with no overrides, suppressions, or
+config exclusions:
 
 ```bash
-quality-gate --check all --no-cache    # 46/46, 0/0
-swift test                             # 166 tests, 29 suites
+quality-gate --check all               # 49 of 49 checkers; 4 are not applicable and SKIP
+swift test                             # 226 tests, 35 suites, ~2 s
 cd metal_infer && make                 # builds; 19 pre-existing warnings
 ```
 
-Note the plain `quality-gate` invocation runs 40 of 45 checkers ("5 not selected") and
-caches results. Use `--check all --no-cache` to see the real picture — a cached run will
-happily report PASSED for files it never examined, which is how the gaps fixed last
-session stayed hidden. Also use `--continue-on-failure`: the gate halts at the first
-failing checker, and a run that stops at `[safety]` leaves 31 checkers unreported.
+The plain `quality-gate` invocation (what the pre-commit hook runs) selects 43 of the 49;
+the pre-push hook runs `--check all`. Use `--continue-on-failure` when investigating: the gate
+halts at the first failing checker otherwise.
 
-## What the last session did
+The server tests drive a real `HTTPServer` on a loopback ephemeral port
+(`Tests/SwiftMoETests/HTTPTestSupport.swift`). Where a test needs the server to have reached a
+state — a request queued, a connection released — it waits on `RunningServer.events`, which
+the server feeds through an internal observer. Do not replace those waits with sleeps.
 
-Drove the gate from 10 errors / 32 warnings to 0/0. Full detail in
-`project/summaries/2026-08-25_QualityGateZeroZero.md`. The parts worth carrying forward:
+## Worth carrying forward
+
+From the bounded-work session (2026-10-09):
+
+- **`TokenGenerator.generate` is a new sequence every call.** It resets the KV caches and
+  linear-attention state first. It always restarted at position 0; it used to keep the
+  previous call's cache entries as well, so one HTTP caller's prompt was attended to by the
+  next caller's request. Multi-turn KV reuse, if it is ever wanted, needs a real design — a
+  position that continues, and a cache keyed by conversation.
+- **`KVCache.append` throws at capacity.** Do not "fix" a `sequenceCapacityExceeded` by
+  catching it and carrying on: the point is that a truncated history is never computed from.
+- **The server owns the tokenizer.** `HTTPServer(tokenizer:)` counts the prompt and hands the
+  same tokens to the handler in `HTTPServer.Request`. `--model` mode should pass the BPE
+  tokenizer through that parameter, not tokenize again in the handler.
+- **A handler must ask `writer.clientHasDisconnected`.** The server cannot interrupt a
+  handler. `swift-moe-server` passes it to `generate(shouldContinue:)`.
+- **A half-closed client counts as gone.** `poll(2)` cannot tell `shutdown(SHUT_WR)` from
+  `close`. This is documented in the README and CHANGELOG as a client requirement.
+- **Every response ends with a drain, streams included.** Closing a socket over unread bytes
+  resets it and the client loses what it had not read yet.
+
+From the quality-gate session (2026-08-25, `project/summaries/2026-08-25_QualityGateZeroZero.md`):
 
 - **`compute_decay_beta` had a real out-of-bounds hazard** — it indexed six buffers by
   thread id with no bound and took no count to bound against. Now takes `num_v_heads`;
@@ -52,16 +78,16 @@ Drove the gate from 10 errors / 32 warnings to 0/0. Full detail in
 
 ## Next step
 
-Nothing is half-finished — pick up whatever is next by priority. The standing candidates,
-unchanged by last session:
-
-1. **Numerical equivalence against real Qwen3.5-397B weights.** Still unvalidated, and the
+1. **Merge the PR and tag 0.1.0.** See "What the tagging commit must change" in the summary.
+2. **Numerical equivalence against real Qwen3.5-397B weights.** Still unvalidated, and the
    largest open risk. Everything is currently verified against synthetic fixtures and a
    CPU reference; the 209GB model has never been run through the Swift engine.
-2. **Performance benchmarking vs. the original C engine.** No Swift-side numbers exist yet.
+3. **`swift-moe-server --model`.** Not implemented; the server only serves `--demo`.
+4. **Performance benchmarking vs. the original C engine.** No Swift-side numbers exist yet.
    The C engine's baseline is 4.36 tok/s at 4-bit (see `CLAUDE.md`).
-3. **DocC documentation generation.**
-4. **Additional model presets** (DeepSeek-V3, Mixtral).
+5. The open server items in `project/master_plan.md` under Remaining: a whole-response
+   deadline, unauthenticated connection slots, a mid-stream error event.
+6. **Additional model presets** (DeepSeek-V3, Mixtral).
 
 ## Known noise (pre-existing, outside the gate)
 

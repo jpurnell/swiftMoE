@@ -1,7 +1,7 @@
 import Foundation
 
 /// Errors thrown by the FlashMoE inference engine.
-public enum FlashMoEError: Error, Sendable {
+public enum FlashMoEError: Error, Sendable, Equatable {
     /// No Metal-capable GPU device found on this system.
     case metalUnavailable
 
@@ -31,4 +31,15 @@ public enum FlashMoEError: Error, Sendable {
     /// Host names are refused rather than resolved, so a name can never widen a listener past
     /// the address its caller wrote down.
     case invalidBindAddress(host: String)
+
+    /// A sequence needs more positions than the KV caches were allocated for.
+    ///
+    /// The caches do not grow. Recording nothing past the end would leave every later token
+    /// attending to a history with a hole in it, and nothing in the output would say so; this
+    /// is thrown instead, before the position is computed.
+    ///
+    /// - Parameters:
+    ///   - capacity: Positions the caches hold.
+    ///   - required: Positions the sequence needs — for an append, the one being written.
+    case sequenceCapacityExceeded(capacity: Int, required: Int)
 }

@@ -19,10 +19,22 @@ extension HTTPServer {
 
         /// Most tokens one request may ask for. Default ``TokenGenerator/defaultMaxSequenceLength``.
         ///
-        /// The KV caches hold that many positions and stop recording beyond them, so a longer
-        /// generation would be computed against a truncated history. At the measured 4.4
-        /// tokens per second the default is already half an hour of GPU time for one request.
+        /// It may not exceed ``maxSequenceTokens``, and a request is also held to that limit
+        /// with its prompt counted in, so a count this large only fits beside an empty prompt.
+        /// At the measured 4.4 tokens per second the default is already half an hour of GPU
+        /// time for one request.
         public var maxCompletionTokens: Int = TokenGenerator.defaultMaxSequenceLength
+
+        /// Most positions one request may occupy, prompt and completion together. Default
+        /// ``TokenGenerator/defaultMaxSequenceLength``.
+        ///
+        /// Set it to the capacity of the generator behind the handler
+        /// (``TokenGenerator/maxSequenceLength``). The prompt is counted with the server's
+        /// ``HTTPServer/Tokenizer``; a request whose prompt tokens plus requested completion
+        /// tokens come to more than this is refused with a 400 that gives all three numbers.
+        /// The completion is not shortened to fit: that would be a different answer from the
+        /// one asked for.
+        public var maxSequenceTokens: Int = TokenGenerator.defaultMaxSequenceLength
 
         /// Tokens generated when a request names no count. Default 100, as before.
         public var defaultCompletionTokens: Int = 100
@@ -61,22 +73,49 @@ extension HTTPServer {
         /// is read and thrown away — never buffered — until it ends or this much time has gone.
         public var refusalDrainDeadline: Duration = .seconds(2)
 
+        /// Longest a validated request waits for the model before it is turned away. Default 30 s.
+        ///
+        /// One request runs at a time. The rest wait their turn, each holding a connection;
+        /// a request whose turn has not come by this deadline is answered 503 with
+        /// `Retry-After` and its connection is released. Thirty seconds is one default-sized
+        /// completion — 100 tokens at the measured 4.4 per second is 23 s — so a request behind
+        /// an ordinary one is served and a request behind a half-hour one is told promptly.
+        public var queueDeadline: Duration = .seconds(30)
+
+        /// Seconds a turned-away client is told to wait: ``queueDeadline`` rounded up to a
+        /// whole second, and never less than one.
+        public var retryAfterSeconds: Int {
+            let milliseconds = ClientConnection.milliseconds(queueDeadline)
+            let (rounded, overflow) = milliseconds.addingReportingOverflow(Self.millisecondsPerSecond - 1)
+            let seconds = (overflow ? milliseconds : rounded) / Self.millisecondsPerSecond
+            return Int(clamping: max(1, seconds))
+        }
+
+        private static let millisecondsPerSecond: Int64 = 1000
+
         /// Most connections being read at once. Default 16.
         ///
         /// Inference itself is one request at a time; this bounds how many clients may be
-        /// connected and part-way through sending. One more is answered 503.
+        /// connected at all — sending, waiting for the model, or being answered. One more is
+        /// answered 503 with `Retry-After`. It is also what bounds the queue for the model:
+        /// every waiting request is one of these connections, so at most `maxConnections - 1`
+        /// can be waiting behind the one that is running.
         public var maxConnections: Int = 16
 
         /// Creates the default limits.
         public init() {}
 
-        /// Checks that every limit is positive and the default token count fits the ceiling.
+        /// Checks that every limit is positive, the default token count fits the completion
+        /// ceiling, and the completion ceiling fits the sequence.
         ///
-        /// - Throws: ``HTTPServerError/invalidLimit(name:)`` naming the first limit that fails.
+        /// - Throws: ``HTTPServerError/invalidLimit(name:)`` naming the first limit that is not
+        ///   positive; ``HTTPServerError/limitAboveLimit(name:ceiling:)`` naming the first that
+        ///   is larger than the limit bounding it.
         func validate() throws {
             let counts: [(String, Int)] = [
                 ("maxHeaderBytes", maxHeaderBytes),
                 ("maxBodyBytes", maxBodyBytes),
+                ("maxSequenceTokens", maxSequenceTokens),
                 ("maxCompletionTokens", maxCompletionTokens),
                 ("defaultCompletionTokens", defaultCompletionTokens),
                 ("maxConnections", maxConnections),
@@ -84,13 +123,18 @@ extension HTTPServer {
             for (name, value) in counts where value <= 0 {
                 throw HTTPServerError.invalidLimit(name: name)
             }
+            guard maxCompletionTokens <= maxSequenceTokens else {
+                throw HTTPServerError.limitAboveLimit(name: "maxCompletionTokens", ceiling: "maxSequenceTokens")
+            }
             guard defaultCompletionTokens <= maxCompletionTokens else {
-                throw HTTPServerError.invalidLimit(name: "defaultCompletionTokens")
+                throw HTTPServerError.limitAboveLimit(name: "defaultCompletionTokens",
+                                                      ceiling: "maxCompletionTokens")
             }
             let deadlines: [(String, Duration)] = [
                 ("readDeadline", readDeadline),
                 ("writeDeadline", writeDeadline),
                 ("refusalDrainDeadline", refusalDrainDeadline),
+                ("queueDeadline", queueDeadline),
             ]
             for (name, value) in deadlines where value <= .zero {
                 throw HTTPServerError.invalidLimit(name: name)

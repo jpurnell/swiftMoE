@@ -38,10 +38,26 @@ struct HTTPRefusal: Equatable, Sendable {
     static let wrongHost = HTTPRefusal("421 Misdirected Request", "The Host header does not name this server.")
     static let transferEncoding = HTTPRefusal("501 Not Implemented",
                                               "Transfer-Encoding is not supported; send Content-Length.")
-    static let busy = HTTPRefusal("503 Service Unavailable", "The server is at its connection limit.",
-                                  type: "server_error")
     static let versionNotSupported = HTTPRefusal("505 HTTP Version Not Supported",
                                                  "Only HTTP/1.0 and HTTP/1.1 are supported.")
+
+    /// One connection more than the server serves at once.
+    ///
+    /// - Parameter seconds: What to send as `Retry-After`.
+    static func busy(retryAfter seconds: Int) -> HTTPRefusal {
+        HTTPRefusal("503 Service Unavailable", "The server is at its connection limit.",
+                    type: "server_error", headers: ["Retry-After: \(seconds)"])
+    }
+
+    /// A request whose turn at the model did not come within the queue deadline.
+    ///
+    /// - Parameter seconds: What to send as `Retry-After`.
+    static func queueTimedOut(retryAfter seconds: Int) -> HTTPRefusal {
+        HTTPRefusal(
+            "503 Service Unavailable",
+            "The server is busy with another request and could not start this one in time. Try again later.",
+            type: "server_error", headers: ["Retry-After: \(seconds)"])
+    }
 
     /// A body larger than the configured limit.
     static func bodyTooLarge(limit: Int) -> HTTPRefusal {
@@ -60,6 +76,21 @@ struct HTTPRefusal: Equatable, Sendable {
     ///   - maximum: The configured ceiling.
     static func tokensOutOfRange(field: String, maximum: Int) -> HTTPRefusal {
         HTTPRefusal("400 Bad Request", "\(field) must be a whole number from 1 to \(maximum).")
+    }
+
+    /// A prompt and completion that together need more positions than a sequence holds.
+    ///
+    /// - Parameters:
+    ///   - promptTokens: Tokens in the prompt, as the server's tokenizer counted them.
+    ///   - completionTokens: Tokens the request asked to generate, or the default.
+    ///   - limit: The configured sequence limit.
+    static func sequenceTooLong(promptTokens: Int, completionTokens: Int, limit: Int) -> HTTPRefusal {
+        let (total, overflow) = promptTokens.addingReportingOverflow(completionTokens)
+        let sum = overflow ? "more than \(Int.max)" : String(total)
+        return HTTPRefusal(
+            "400 Bad Request",
+            "Prompt (\(promptTokens) tokens) plus completion (\(completionTokens) tokens) is \(sum) tokens; "
+                + "the limit for a sequence is \(limit). Shorten the prompt or lower max_tokens.")
     }
 
     /// The JSON error body.

@@ -196,7 +196,7 @@ struct IntegrationTests {
         let gen = TokenGenerator(context: ctx, config: config, activeExperts: config.numExpertsPerToken)
 
         var generatedTokens: [Int] = []
-        gen.generate(
+        try gen.generate(
             promptTokens: [0],  // Single token prompt
             maxTokens: 3,       // Generate up to 3 tokens
             weightFile: wf,

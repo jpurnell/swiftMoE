@@ -22,13 +22,19 @@ public struct KVCache {
         self.vCache = [Float](repeating: 0, count: maxLength * kvDim)
     }
 
+    /// Positions this cache holds. It does not grow.
+    public var capacity: Int { maxLength }
+
     /// Appends a new K/V pair at the current position.
     ///
     /// - Parameters:
     ///   - k: Key vector [kvDim].
     ///   - v: Value vector [kvDim].
-    public mutating func append(k: [Float], v: [Float]) {
-        guard length < maxLength else { return }
+    /// - Throws: ``FlashMoEError/sequenceCapacityExceeded(capacity:required:)`` when the cache
+    ///   is full. Nothing is recorded: a full cache used to return here without a word, and
+    ///   every later token attended to a history that had stopped growing.
+    public mutating func append(k: [Float], v: [Float]) throws {
+        try requireRoom()
         let offset = length * kvDim
         kCache.replaceSubrange(offset..<offset + kvDim, with: k)
         vCache.replaceSubrange(offset..<offset + kvDim, with: v)
@@ -36,14 +42,27 @@ public struct KVCache {
     }
 
     /// Appends K/V from raw pointers (zero-copy for GPU mirror updates).
-    public mutating func append(kPtr: UnsafePointer<Float>, vPtr: UnsafePointer<Float>) {
-        guard length < maxLength else { return }
+    ///
+    /// - Parameters:
+    ///   - kPtr: Key vector, `kvDim` elements.
+    ///   - vPtr: Value vector, `kvDim` elements.
+    /// - Throws: ``FlashMoEError/sequenceCapacityExceeded(capacity:required:)`` when the cache
+    ///   is full; nothing is recorded.
+    public mutating func append(kPtr: UnsafePointer<Float>, vPtr: UnsafePointer<Float>) throws {
+        try requireRoom()
         let offset = length * kvDim
         for i in 0..<kvDim {
             kCache[offset + i] = kPtr[i]
             vCache[offset + i] = vPtr[i]
         }
         length += 1
+    }
+
+    /// Throws unless one more position fits.
+    private func requireRoom() throws {
+        guard length < maxLength else {
+            throw FlashMoEError.sequenceCapacityExceeded(capacity: maxLength, required: length + 1)
+        }
     }
 
     /// Provides read access to the K cache.

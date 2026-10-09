@@ -46,7 +46,7 @@ struct HTTPServerLimitsTests {
         case "writeDeadline": limits.writeDeadline = .zero
         default: limits.refusalDrainDeadline = .zero
         }
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits) { _, _, _ in }
+        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _ in }
         #expect(throws: HTTPServerError.invalidLimit(name: name)) {
             _ = try server.openListener()
         }
@@ -57,8 +57,9 @@ struct HTTPServerLimitsTests {
     func defaultAboveCeiling() {
         var limits = HTTPServer.Limits()
         limits.maxCompletionTokens = 50
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits) { _, _, _ in }
-        #expect(throws: HTTPServerError.invalidLimit(name: "defaultCompletionTokens")) {
+        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _ in }
+        #expect(throws: HTTPServerError.limitAboveLimit(name: "defaultCompletionTokens",
+                                                        ceiling: "maxCompletionTokens")) {
             _ = try server.openListener()
         }
     }
@@ -70,14 +71,32 @@ struct HTTPServerLimitsTests {
         let running = try RunningServer()
         defer { running.shutdown() }
 
-        #expect(try running.exchange(running.request(body: Self.body(#""max_tokens":8192"#))) == Expected.stream())
+        // The ceiling is the whole sequence, so it fits only beside a prompt of no tokens.
+        #expect(try running.exchange(running.request(body: #"{"messages":[],"max_tokens":8192}"#))
+            == Expected.stream())
+        // "hi" is two tokens to the stub tokenizer: 8190 is the most that fits beside it.
+        #expect(try running.exchange(running.request(body: Self.body(#""max_tokens":8190"#))) == Expected.stream())
         #expect(try running.exchange(running.request(body: Self.body(#""max_tokens":1"#))) == Expected.stream())
         #expect(try running.exchange(running.request(body: Self.body(#""max_tokens":64.0"#))) == Expected.stream())
         #expect(running.handlerCalls == [
-            HandlerCall(prompt: "hi", maxTokens: 8192),
+            HandlerCall(prompt: "", maxTokens: 8192),
+            HandlerCall(prompt: "hi", maxTokens: 8190),
             HandlerCall(prompt: "hi", maxTokens: 1),
             HandlerCall(prompt: "hi", maxTokens: 64),
         ])
+    }
+
+    @Test("max_tokens within the ceiling but past the sequence, prompt included, is a 400 of its own")
+    func tokensWithinCeilingPastSequence() throws {
+        let running = try RunningServer()
+        defer { running.shutdown() }
+
+        let response = try running.exchange(running.request(body: Self.body(#""max_tokens":8191"#)))
+        #expect(response == Expected.refusal(
+            "400 Bad Request",
+            "Prompt (2 tokens) plus completion (8191 tokens) is 8193 tokens; "
+                + "the limit for a sequence is 8192. Shorten the prompt or lower max_tokens."))
+        #expect(running.handlerCalls == [])
     }
 
     @Test("max_tokens one over the ceiling is a 400 that says so, not a quiet 8192")
@@ -128,7 +147,7 @@ struct HTTPServerLimitsTests {
         let running = try RunningServer()
         defer { running.shutdown() }
 
-        #expect(try running.exchange(running.request(body: Self.body(#""max_completion_tokens":8192"#)))
+        #expect(try running.exchange(running.request(body: Self.body(#""max_completion_tokens":8190"#)))
             == Expected.stream())
         #expect(try running.exchange(running.request(body: Self.body(#""max_completion_tokens":8193"#)))
             == Self.tokenRefusal("max_completion_tokens"))
@@ -136,7 +155,7 @@ struct HTTPServerLimitsTests {
             == Self.tokenRefusal("max_completion_tokens"))
         #expect(try running.exchange(running.request(body: Self.body(#""max_completion_tokens":-5"#)))
             == Self.tokenRefusal("max_completion_tokens"))
-        #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 8192)])
+        #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 8190)])
     }
 
     @Test("When both are sent, max_completion_tokens wins, and an invalid loser is still refused")

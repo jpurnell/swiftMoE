@@ -84,7 +84,7 @@ struct HTTPServerAccessTests {
     @Test("A listener off loopback refuses to open without a credential, and binds nothing")
     func nonLoopbackNeedsCredential() {
         for host in ["0.0.0.0", "10.0.1.114"] {
-            let server = HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback) { _, _, _ in }
+            let server = HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback, tokenizer: RunningServer.byteTokenizer) { _, _ in }
             #expect(throws: HTTPServerError.credentialRequired(host: host)) {
                 _ = try server.openListener()
             }
@@ -188,7 +188,7 @@ struct HTTPServerAccessTests {
                       "https://", "https://a b", ""])
     func invalidAllowlistEntry(entry: String) {
         let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback,
-                                allowedOrigins: [entry]) { _, _, _ in }
+                                allowedOrigins: [entry], tokenizer: RunningServer.byteTokenizer) { _, _ in }
         #expect(throws: HTTPServerError.invalidOrigin(entry)) {
             _ = try server.openListener()
         }

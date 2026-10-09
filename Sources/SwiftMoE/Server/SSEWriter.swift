@@ -9,7 +9,7 @@ import Foundation
 /// ```
 ///
 /// Each token is sent as a separate SSE event. The stream ends with `data: [DONE]`.
-public struct SSEWriter {
+public struct SSEWriter: Sendable {
     private let fileDescriptor: Int32
     private let requestID: String
     /// Header lines the server adds for this request — the CORS headers for an allowed origin.
@@ -72,39 +72,64 @@ public struct SSEWriter {
     /// Sends a finish reason (stop, length, etc.) before [DONE].
     public func sendFinish(reason: String = "stop") {
         let chunk = """
-        data: {"id":"req_\(requestID)","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"\(reason)"}]}\n\n
+        data: {"id":"req_\(requestID)","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"\(jsonEscape(reason))"}]}\n\n
         """
         writeString(chunk)
+    }
+
+    /// Whether the client has gone away: closed the connection, shut its sending side, or failed.
+    ///
+    /// A handler should ask before each unit of work it cannot take back — the server passes
+    /// this to ``TokenGenerator`` as `shouldContinue` — because a write only fails after the
+    /// fact, and prefill writes nothing at all. Asking costs one `poll(2)` and one `recv(2)`,
+    /// and discards anything the client sent after its request.
+    ///
+    /// A client that shuts only its sending side cannot be told from one that has left, and
+    /// is counted as gone. A client must keep its side open until it has its answer.
+    public var clientHasDisconnected: Bool {
+        clientHasDisconnected(within: .zero)
+    }
+
+    /// Whether the client has gone away, waiting up to `wait` for it to.
+    ///
+    /// - Parameter wait: How long to wait; zero only looks.
+    /// - Returns: `true` once the client is gone, `false` if it is still there when the wait ends.
+    func clientHasDisconnected(within wait: Duration) -> Bool {
+        ClientConnection.peerHasClosed(descriptor: fileDescriptor, waitingUpTo: wait)
     }
 
     // MARK: - Private
 
     @discardableResult
     private func writeString(_ s: String) -> Bool {
-        let data = Array(s.utf8)
-        var written = 0
-        while written < data.count {
-            let n = data[written...].withUnsafeBufferPointer { buf in
-                guard let base = buf.baseAddress else { return -1 }
-                return Darwin.write(fileDescriptor, base, buf.count)
-            }
-            if n <= 0 { return false }
-            written += n
-        }
-        return true
+        ClientConnection.write(Array(s.utf8), to: fileDescriptor)
     }
 
+    /// First code point that JSON allows unescaped inside a string.
+    private static let firstUnescapedScalar: UInt32 = 0x20
+    private static let hexRadix = 16
+    /// Hex digits in a `\uXXXX` escape.
+    private static let unicodeEscapeDigits = 4
+
+    /// Escapes text for the inside of a JSON string.
+    ///
+    /// Quotes, backslashes and every control character below U+0020 are escaped, as RFC 8259
+    /// requires. A model emits whatever its vocabulary holds; an unescaped control character
+    /// makes the event unparseable, and an unescaped line feed would end the SSE line early.
     private func jsonEscape(_ s: String) -> String {
         var result = ""
-        result.reserveCapacity(s.count)
-        for c in s {
-            switch c {
+        result.reserveCapacity(s.utf8.count)
+        for scalar in s.unicodeScalars {
+            switch scalar {
             case "\"": result += "\\\""
             case "\\": result += "\\\\"
             case "\n": result += "\\n"
             case "\r": result += "\\r"
             case "\t": result += "\\t"
-            default: result.append(c)
+            case _ where scalar.value < Self.firstUnescapedScalar:
+                let digits = String(scalar.value, radix: Self.hexRadix)
+                result += "\\u" + String(repeating: "0", count: max(0, Self.unicodeEscapeDigits - digits.count)) + digits
+            default: result.unicodeScalars.append(scalar)
             }
         }
         return result
