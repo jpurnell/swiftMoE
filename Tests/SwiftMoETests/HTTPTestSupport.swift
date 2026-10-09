@@ -105,7 +105,8 @@ final class RunningServer: Sendable {
         let requests = self.requests
         let events = self.events
         let server = HTTPServer(host: HTTPServer.loopbackHost, port: 0, authentication: authentication,
-                                allowedOrigins: allowedOrigins, limits: limits, tokenizer: tokenizer,
+                                allowedOrigins: allowedOrigins, limits: limits, allowPlaintext: false,
+                                tokenizer: tokenizer,
                                 observer: { events.record($0) }) { request, writer in
             calls.withLock { $0.append(HandlerCall(prompt: request.prompt, maxTokens: request.maxTokens)) }
             requests.withLock { $0.append(request) }

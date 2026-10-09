@@ -23,6 +23,9 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
     case keyFileTooLarge(path: String, limit: Int)
     /// No key was supplied, and nothing excused the listener on `host` from needing one.
     case credentialRequired(host: String)
+    /// The listener on `host` can be reached from other machines, and nobody has said that
+    /// something else encrypts the traffic.
+    case plaintextNotAcknowledged(host: String)
     /// `--no-auth` was given together with a key.
     case conflictingAuthentication
     /// An allowed origin is not of the form `scheme://host[:port]`.
@@ -53,6 +56,12 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
                 return remedy + " On loopback, --no-auth starts it without one."
             }
             return remedy + " A listener that is not on loopback cannot run without one."
+        case .plaintextNotAcknowledged(let host):
+            return "Refusing to listen on \(host) in plain text: other machines can reach it, and the "
+                + "API key and every prompt would cross the network unencrypted. This server does not speak TLS. "
+                + "Bind loopback (--host 127.0.0.1) and put a TLS-terminating proxy on this machine in front of it; "
+                + "or, if a TLS-terminating proxy on the same trust boundary already fronts this port, "
+                + "pass --allow-plaintext."
         case .conflictingAuthentication:
             return "--no-auth was given together with an API key. Remove one of them."
         case .invalidOrigin(let origin):

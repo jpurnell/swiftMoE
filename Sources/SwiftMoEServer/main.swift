@@ -9,7 +9,8 @@ import SwiftMoE
 //
 // Usage:
 //   swift-moe-server --demo [--host 127.0.0.1] [--port 8080] [--api-key-file <path>]
-//                    [--allow-origin <origin>]... [--no-auth] [--k 4] [--2bit] [--timing]
+//                    [--allow-origin <origin>]... [--no-auth] [--allow-plaintext]
+//                    [--k 4] [--2bit] [--timing]
 //
 // Authentication:
 //   Every request must carry `Authorization: Bearer <key>`. The key is read from the file
@@ -19,6 +20,12 @@ import SwiftMoE
 //
 //   Without a key the server does not start. --no-auth starts it without one on a loopback
 //   address only; on any other address a key is required and --no-auth is refused.
+//
+// Transport:
+//   The server speaks plain HTTP; it does not do TLS. On a loopback address that exposes
+//   nothing. On any other --host it refuses to start unless --allow-plaintext is given, which
+//   states that a TLS-terminating proxy on the same trust boundary fronts this port. The flag
+//   encrypts nothing: between that proxy and this port the key and the prompts are readable.
 //
 // Browsers:
 //   No CORS headers are sent, and a request carrying an Origin is refused, unless that origin
@@ -41,6 +48,7 @@ struct ServerConfig {
     var shaderPath: String = "metal_infer/shaders.metal"
     var apiKeyFile: String?
     var noAuth: Bool = false
+    var allowPlaintext: Bool = false
     var allowedOrigins: [String] = []
 }
 
@@ -69,6 +77,7 @@ func parseArgs() throws -> ServerConfig {
                 config.allowedOrigins.append(args[i])
             }
         case "--no-auth": config.noAuth = true
+        case "--allow-plaintext": config.allowPlaintext = true
         default: break
         }
         i += 1
@@ -87,6 +96,9 @@ func main() throws {
         environment: ProcessInfo.processInfo.environment,
         noAuth: serverConfig.noAuth
     )
+
+    try HTTPServer.requirePlaintextAcknowledged(host: serverConfig.host,
+                                                allowPlaintext: serverConfig.allowPlaintext)
 
     let modelConfig: ModelConfig
     let weightFile: WeightFile
@@ -235,6 +247,7 @@ func main() throws {
         authentication: authentication,
         allowedOrigins: serverConfig.allowedOrigins,
         limits: limits,
+        allowPlaintext: serverConfig.allowPlaintext,
         tokenizer: tokenizer
     ) { request, writer in
         logger.info("[request] prompt=\(request.prompt.prefix(80), privacy: .private)... promptTokens=\(request.promptTokens.count, privacy: .public) maxTokens=\(request.maxTokens, privacy: .public)")

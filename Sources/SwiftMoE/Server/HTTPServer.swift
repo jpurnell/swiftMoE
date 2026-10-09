@@ -33,6 +33,9 @@ typealias HTTPServerObserver = @Sendable (HTTPServerEvent) -> Void
 ///   ``Authentication/bearer(_:)`` requires `Authorization: Bearer <key>` on every request and
 ///   answers 401 otherwise. ``Authentication/unauthenticatedLoopback`` checks nothing, and
 ///   ``openListener()`` refuses it for any address that is not loopback.
+/// - **Transport.** The server speaks plain HTTP and nothing else. ``openListener()`` refuses
+///   an address other machines can reach unless the server was created with
+///   `allowPlaintext: true`, which says a TLS-terminating proxy stands in front of it.
 /// - **Origin.** No CORS header is sent unless an origin is on `allowedOrigins`, and a request
 ///   carrying any other `Origin` is refused. Loopback does not keep a web page out — the
 ///   browser is on loopback too — so this is what does.
@@ -155,6 +158,9 @@ public final class HTTPServer: Sendable {
     /// Bounds on a request and a connection.
     public let limits: Limits
 
+    /// Whether the operator has said that something else encrypts this listener's traffic.
+    public let allowsPlaintext: Bool
+
     /// The listening socket and the accept loop's progress, guarded together.
     private struct State {
         /// The listening socket, or -1.
@@ -189,6 +195,9 @@ public final class HTTPServer: Sendable {
     ///   - authentication: How callers are authenticated. Deliberately without a default.
     ///   - allowedOrigins: Origins, as `scheme://host[:port]`, whose pages may call the server.
     ///   - limits: Bounds on a request and a connection.
+    ///   - allowPlaintext: States that a TLS-terminating proxy on the same trust boundary
+    ///     fronts this port. Required to bind anything but loopback; see
+    ///     ``requirePlaintextAcknowledged(host:allowPlaintext:)``.
     ///   - tokenizer: Splits a prompt into tokens. Deliberately without a default: the
     ///     sequence budget is only as true as the count it is given.
     ///   - handler: Callback invoked for each chat completion request, one at a time, on a
@@ -199,11 +208,13 @@ public final class HTTPServer: Sendable {
         authentication: Authentication,
         allowedOrigins: [String] = [],
         limits: Limits = Limits(),
+        allowPlaintext: Bool = false,
         tokenizer: @escaping Tokenizer,
         handler: @escaping RequestHandler
     ) {
         self.init(host: host, port: port, authentication: authentication, allowedOrigins: allowedOrigins,
-                  limits: limits, tokenizer: tokenizer, observer: nil, handler: handler)
+                  limits: limits, allowPlaintext: allowPlaintext, tokenizer: tokenizer, observer: nil,
+                  handler: handler)
     }
 
     /// Creates an HTTP server that reports what happens to its connections.
@@ -216,10 +227,12 @@ public final class HTTPServer: Sendable {
         authentication: Authentication,
         allowedOrigins: [String],
         limits: Limits,
+        allowPlaintext: Bool,
         tokenizer: @escaping Tokenizer,
         observer: HTTPServerObserver?,
         handler: @escaping RequestHandler
     ) {
+        self.allowsPlaintext = allowPlaintext
         self.observer = observer
         self.host = host
         self.port = port
@@ -267,6 +280,25 @@ public final class HTTPServer: Sendable {
         return UInt32(bigEndian: address) >> 24 == Self.loopbackNetwork
     }
 
+    /// Refuses a plain-text listener that other machines can reach, unless that was asked for.
+    ///
+    /// This server does not speak TLS. On loopback that exposes nothing. Anywhere else the
+    /// bearer key and every prompt and completion cross the network readable, so the bind is
+    /// refused unless the operator states — `--allow-plaintext` — that a TLS-terminating
+    /// proxy on the same trust boundary fronts the port. The statement encrypts nothing; it
+    /// records that the hop from that proxy to here is one the operator trusts.
+    ///
+    /// - Parameters:
+    ///   - host: The address the listener will bind.
+    ///   - allowPlaintext: Whether the operator has acknowledged the exposure.
+    /// - Throws: ``HTTPServerError/plaintextNotAcknowledged(host:)`` when `host` is not in
+    ///   `127.0.0.0/8` and `allowPlaintext` is `false`.
+    public static func requirePlaintextAcknowledged(host: String, allowPlaintext: Bool) throws {
+        guard isLoopback(host) || allowPlaintext else {
+            throw HTTPServerError.plaintextNotAcknowledged(host: host)
+        }
+    }
+
     /// First octet of the IPv4 loopback block (RFC 1122 §3.2.1.3).
     private static let loopbackNetwork: UInt32 = 127
 
@@ -282,6 +314,8 @@ public final class HTTPServer: Sendable {
     /// - Throws: ``FlashMoEError/invalidBindAddress(host:)`` when ``host`` is not an IPv4
     ///   literal; ``HTTPServerError/credentialRequired(host:)`` when ``host`` is not loopback
     ///   and ``authentication`` is ``Authentication/unauthenticatedLoopback``;
+    ///   ``HTTPServerError/plaintextNotAcknowledged(host:)`` when ``host`` is not loopback and
+    ///   ``allowsPlaintext`` is `false`;
     ///   ``HTTPServerError/invalidOrigin(_:)`` and ``HTTPServerError/invalidLimit(name:)`` for
     ///   a bad allowlist entry or limit; ``FlashMoEError/readFailed(errno:context:)`` when a
     ///   socket call fails.
@@ -295,6 +329,7 @@ public final class HTTPServer: Sendable {
         if case .unauthenticatedLoopback = authentication, !Self.isLoopback(host) {
             throw HTTPServerError.credentialRequired(host: host)
         }
+        try Self.requirePlaintextAcknowledged(host: host, allowPlaintext: allowsPlaintext)
         for origin in allowedOrigins where !Self.isOrigin(origin) {
             throw HTTPServerError.invalidOrigin(origin)
         }
@@ -367,7 +402,7 @@ public final class HTTPServer: Sendable {
             logger.warning("[server] Running WITHOUT authentication on \(bound.host, privacy: .public): any local process can run inference.")
         }
         if !Self.isLoopback(bound.host) {
-            logger.warning("[server] Bound to \(bound.host, privacy: .public), which is not loopback: the bearer key travels in clear text unless TLS is terminated in front of this server.")
+            logger.warning("[server] Bound to \(bound.host, privacy: .public) in plain text, as acknowledged (--allow-plaintext): the bearer key, prompts and completions are unencrypted between the TLS-terminating proxy and this port.")
         }
 
         while !state.withLock({ $0.stopRequested }) {
