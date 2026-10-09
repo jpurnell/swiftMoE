@@ -17,7 +17,7 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 
 ## Status
 
-Pre-release: no version has been tagged yet. The engine is verified against synthetic fixtures
+Pre-1.0: the first tagged version is 0.1.0. The engine is verified against synthetic fixtures
 and a CPU reference; it has **not** yet been run against the real Qwen3.5-397B weights, and
 `swift-moe-server` serves only the synthetic `--demo` model (`--model` is not implemented).
 
@@ -28,11 +28,11 @@ and a CPU reference; it has **not** yet been run against the real Qwen3.5-397B w
 
 ## Installation
 
-As a package dependency, until the first version is tagged, track `main`:
+As a package dependency:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jpurnell/swiftMoE", branch: "main"),
+    .package(url: "https://github.com/jpurnell/swiftMoE", from: "0.1.0"),
 ],
 targets: [
     .target(name: "YourTarget", dependencies: [.product(name: "SwiftMoE", package: "swiftMoE")]),

@@ -4,10 +4,10 @@ All notable changes to SwiftMoE are documented in this file.
 
 ## [Unreleased]
 
-No version of SwiftMoE has been tagged. Everything below is intended to ship as the first
-tag, 0.1.0 — a `0.x` minor, because these changes break source and break callers, and because
-the engine has not yet been validated against real weights. This heading stays `[Unreleased]`
-until the commit that is tagged.
+## [0.1.0] - 2026-10-09
+
+The first tagged version. A `0.x` minor, because the engine has not yet been validated against
+real weights and its API is not settled.
 
 ### Security — breaking: bounded work, and no silent truncation
 The server bounded what a client could send and how long it could take sending it. It did not
@@ -289,3 +289,6 @@ read the answer, and let one client decide how much work it did and for how long
 - The chat client waited on `DispatchSemaphore` with no deadline, so an unresponsive
   server blocked it forever; the wait is now bounded and cancels the request
 - Conv1d state shift in linear attention
+
+[Unreleased]: https://github.com/jpurnell/swiftMoE/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jpurnell/swiftMoE/releases/tag/v0.1.0

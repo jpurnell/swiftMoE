@@ -78,7 +78,7 @@ From the quality-gate session (2026-08-25, `project/summaries/2026-08-25_Quality
 
 ## Next step
 
-1. **Merge the PR and tag 0.1.0.** See "What the tagging commit must change" in the summary.
+1. ~~**Merge the PR and tag 0.1.0.**~~ Done 2026-10-09 (`v0.1.0`). See "What the tagging commit must change" in the summary.
 2. **Numerical equivalence against real Qwen3.5-397B weights.** Still unvalidated, and the
    largest open risk. Everything is currently verified against synthetic fixtures and a
    CPU reference; the 209GB model has never been run through the Swift engine.

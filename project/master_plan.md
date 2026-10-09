@@ -148,7 +148,7 @@ SwiftMoE/
 
 ---
 
-**Last Updated:** 2026-10-09 — reconciled for the first release (intended 0.1.0) after the
+**Last Updated:** 2026-10-09 — tagged v0.1.0, the first tag. Same day: reconciled for the first release (intended 0.1.0) after the
 bounded-work fix. Under Remaining: the prompt-length budget and the queued-request items shipped
 and are struck through, the first with a note that it shipped despite the bar it was recorded
 with; the TLS item is restated as a decision (no TLS in the raw-socket server; plain text must be
