@@ -77,6 +77,27 @@ public struct SSEWriter: Sendable {
         writeString(chunk)
     }
 
+    /// Whether the client has gone away: closed the connection, shut its sending side, or failed.
+    ///
+    /// A handler should ask before each unit of work it cannot take back — the server passes
+    /// this to ``TokenGenerator`` as `shouldContinue` — because a write only fails after the
+    /// fact, and prefill writes nothing at all. Asking costs one `poll(2)` and one `recv(2)`,
+    /// and discards anything the client sent after its request.
+    ///
+    /// A client that shuts only its sending side cannot be told from one that has left, and
+    /// is counted as gone. A client must keep its side open until it has its answer.
+    public var clientHasDisconnected: Bool {
+        clientHasDisconnected(within: .zero)
+    }
+
+    /// Whether the client has gone away, waiting up to `wait` for it to.
+    ///
+    /// - Parameter wait: How long to wait; zero only looks.
+    /// - Returns: `true` once the client is gone, `false` if it is still there when the wait ends.
+    func clientHasDisconnected(within wait: Duration) -> Bool {
+        ClientConnection.peerHasClosed(descriptor: fileDescriptor, waitingUpTo: wait)
+    }
+
     // MARK: - Private
 
     @discardableResult

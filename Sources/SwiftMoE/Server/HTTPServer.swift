@@ -5,6 +5,21 @@ import os
 
 private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 
+/// Something that happened to a connection, reported to an ``HTTPServerObserver``.
+enum HTTPServerEvent: Hashable, CaseIterable, Sendable {
+    /// A validated request found the model busy and began to wait.
+    case requestQueued
+    /// A waiting request's client went away; the request was dropped without running.
+    case queuedRequestAbandoned
+    /// A waiting request's deadline passed; it was answered 503.
+    case queuedRequestTimedOut
+    /// A connection was closed and its slot released.
+    case connectionFinished
+}
+
+/// Receives ``HTTPServerEvent``s.
+typealias HTTPServerObserver = @Sendable (HTTPServerEvent) -> Void
+
 /// Minimal HTTP server for OpenAI-compatible chat completions with SSE streaming.
 ///
 /// Listens on a TCP port and answers `POST /v1/chat/completions`, streaming tokens as
@@ -41,7 +56,10 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 ///
 /// ## Concurrency
 /// Connections are read on a bounded pool, so a client that is slow or silent delays nobody
-/// else; the handler is called for one request at a time.
+/// else; the handler is called for one request at a time. A request that arrives while
+/// another is running waits its turn, in arrival order, for at most
+/// ``Limits/queueDeadline``; after that it is answered 503 with `Retry-After`. A request
+/// whose client hangs up while it waits is dropped without running.
 ///
 /// ## Protocol
 /// - **Endpoint:** `POST /v1/chat/completions`
@@ -119,6 +137,10 @@ public final class HTTPServer: Sendable {
     public typealias Tokenizer = @Sendable (_ prompt: String) -> [Int]
 
     /// Called for each chat request that passed every check, one call at a time.
+    ///
+    /// A handler should stop generating once ``SSEWriter/clientHasDisconnected`` is `true` or
+    /// a write returns `false`. The server cannot interrupt a handler, and one that carries on
+    /// for a client that has left keeps every other request waiting for work nobody will read.
     public typealias RequestHandler = (
         _ request: Request,
         _ sseWriter: SSEWriter
@@ -146,6 +168,7 @@ public final class HTTPServer: Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let observer: HTTPServerObserver?
     private let processor: HTTPConnectionProcessor
     /// One permit per connection being served.
     private let connectionSlots: DispatchSemaphore
@@ -170,7 +193,7 @@ public final class HTTPServer: Sendable {
     ///     sequence budget is only as true as the count it is given.
     ///   - handler: Callback invoked for each chat completion request, one at a time, on a
     ///     background thread.
-    public init(
+    public convenience init(
         host: String = HTTPServer.loopbackHost,
         port: UInt16 = 8080,
         authentication: Authentication,
@@ -179,6 +202,25 @@ public final class HTTPServer: Sendable {
         tokenizer: @escaping Tokenizer,
         handler: @escaping RequestHandler
     ) {
+        self.init(host: host, port: port, authentication: authentication, allowedOrigins: allowedOrigins,
+                  limits: limits, tokenizer: tokenizer, observer: nil, handler: handler)
+    }
+
+    /// Creates an HTTP server that reports what happens to its connections.
+    ///
+    /// - Parameter observer: Called, on whichever thread the event happens, for each
+    ///   ``HTTPServerEvent``. Tests wait on these instead of on the clock.
+    init(
+        host: String,
+        port: UInt16,
+        authentication: Authentication,
+        allowedOrigins: [String],
+        limits: Limits,
+        tokenizer: @escaping Tokenizer,
+        observer: HTTPServerObserver?,
+        handler: @escaping RequestHandler
+    ) {
+        self.observer = observer
         self.host = host
         self.port = port
         self.authentication = authentication
@@ -189,6 +231,7 @@ public final class HTTPServer: Sendable {
             allowedOrigins: allowedOrigins,
             limits: limits,
             tokenizer: tokenizer,
+            observer: observer,
             handler: SerializedHandler(handler)
         )
         self.connectionSlots = DispatchSemaphore(value: max(0, limits.maxConnections))
@@ -348,11 +391,13 @@ public final class HTTPServer: Sendable {
     /// the threads at twice ``Limits/maxConnections``.
     private func dispatch(_ clientFD: Int32, bound: BoundAddress) {
         let processor = self.processor
+        let observer = self.observer
         if connectionSlots.wait(timeout: .now()) == .success {
             let slots = connectionSlots
             Thread.detachNewThread {
                 processor.serve(clientFD, bound: bound)
                 slots.signal()
+                observer?(.connectionFinished)
             }
         } else if refusalSlots.wait(timeout: .now()) == .success {
             let slots = refusalSlots

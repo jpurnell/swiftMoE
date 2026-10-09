@@ -5,24 +5,27 @@ import os
 
 private let logger = Logger(subsystem: "com.swiftmoe", category: "server.connection")
 
-/// The request handler and the lock that serializes it.
+/// The request handler and the queue for the one slot it runs in.
 ///
 /// Connections are read concurrently, but the handler drives one model on one GPU and is not
-/// written to be re-entered, so it runs under a lock: one inference at a time, in arrival order
-/// of whoever finishes sending a valid request first.
-// Justification: `handler` is only ever invoked inside `lock.withLock`, so it never runs on two threads at once; `lock` is itself thread-safe.
+/// written to be re-entered, so it runs one request at a time, in the order requests finished
+/// arriving. ``InferenceQueue`` decides whose turn it is.
+// Justification: `handler` is only invoked through `run`, by the one caller `queue` has admitted, so it never runs on two threads at once; `queue` is itself Sendable.
 struct SerializedHandler: @unchecked Sendable {
     private let handler: HTTPServer.RequestHandler
-    private let lock = NSLock()
+    /// Admission to the handler.
+    let queue = InferenceQueue()
 
     init(_ handler: @escaping HTTPServer.RequestHandler) {
         self.handler = handler
     }
 
-    func callAsFunction(_ request: HTTPServer.Request, writer: SSEWriter) {
-        lock.withLock {
-            handler(request, writer)
-        }
+    /// Calls the handler and then gives up the slot.
+    ///
+    /// - Precondition: ``queue`` admitted the caller, which has not yet left.
+    func run(_ request: HTTPServer.Request, writer: SSEWriter) {
+        defer { queue.leave() }
+        handler(request, writer)
     }
 }
 
@@ -43,7 +46,9 @@ struct SerializedHandler: @unchecked Sendable {
 /// 10. The prompt, counted by the server's tokenizer, and the token count together fit in a
 ///     sequence (400).
 ///
-/// Only then does the handler run. The body is not read until step 8, so an unauthenticated
+/// Only then does the request wait its turn for the model — no longer than
+/// ``HTTPServer/Limits/queueDeadline`` (503), and not at all once its client has gone — and
+/// the handler run. The body is not read until step 8, so an unauthenticated
 /// caller can make the server read at most ``HTTPServer/Limits/maxHeaderBytes``.
 struct HTTPConnectionProcessor: Sendable {
 
@@ -60,6 +65,7 @@ struct HTTPConnectionProcessor: Sendable {
     let allowedOrigins: [String]
     let limits: HTTPServer.Limits
     let tokenizer: HTTPServer.Tokenizer
+    let observer: HTTPServerObserver?
     let handler: SerializedHandler
 
     // MARK: - Entry points
@@ -103,7 +109,7 @@ struct HTTPConnectionProcessor: Sendable {
     func refuseBusy(_ descriptor: Int32) {
         defer { close(descriptor) }
         let socket = ClientConnection(descriptor: descriptor, writeDeadline: limits.writeDeadline)
-        refuse(socket, .busy, corsHeaders: [], unread: .unknown)
+        refuse(socket, .busy(retryAfter: limits.retryAfterSeconds), corsHeaders: [], unread: .unknown)
     }
 
     // MARK: - Reading
@@ -204,8 +210,35 @@ struct HTTPConnectionProcessor: Sendable {
             }
             let request = HTTPServer.Request(prompt: chat.prompt, promptTokens: promptTokens,
                                              maxTokens: chat.maxTokens)
+            run(request, on: socket, corsHeaders: corsHeaders)
+        }
+    }
+
+    /// Waits for the model, within the queue deadline, and calls the handler.
+    ///
+    /// The wait ends one of three ways. Admitted: the handler runs. Timed out: the client is
+    /// told 503 with `Retry-After`, through the same drain as every other refusal, since a
+    /// client that has waited this long may well have sent more. Abandoned: the client hung
+    /// up while waiting, so there is nobody to answer and nothing is run on its behalf.
+    private func run(_ request: HTTPServer.Request, on socket: ClientConnection, corsHeaders: [String]) {
+        let admission = handler.queue.enter(
+            deadline: ContinuousClock.now + limits.queueDeadline,
+            isAbandoned: { socket.peerHasClosed() },
+            onQueued: { observer?(.requestQueued) })
+
+        switch admission {
+        case .timedOut:
+            observer?(.queuedRequestTimedOut)
+            refuse(socket, .queueTimedOut(retryAfter: limits.retryAfterSeconds),
+                   corsHeaders: corsHeaders, unread: .unknown)
+        case .abandoned:
+            logger.info("[server] client left while queued; request dropped")
+            observer?(.queuedRequestAbandoned)
+        case .admitted:
             let writer = SSEWriter(fileDescriptor: socket.descriptor, extraHeaders: corsHeaders)
-            handler(request, writer: writer)
+            handler.run(request, writer: writer)
+            // The model is free again; only this connection waits for its client to finish.
+            finish(socket, unread: .unknown)
         }
     }
 
@@ -324,6 +357,17 @@ struct HTTPConnectionProcessor: Sendable {
     private func refuse(_ socket: ClientConnection, _ refusal: HTTPRefusal, corsHeaders: [String], unread: Unread) {
         logger.info("[server] refused: \(refusal.status, privacy: .public)")
         socket.write(refusal.response(corsHeaders: corsHeaders))
+        finish(socket, unread: unread)
+    }
+
+    /// Ends a response so that the client receives all of it: shuts the write side, then
+    /// discards what the client is still sending, for at most
+    /// ``HTTPServer/Limits/refusalDrainDeadline``.
+    ///
+    /// A completed stream ends this way as well as a refusal. The request ended at
+    /// `Content-Length`, but a client may have sent more, and closing over unread bytes resets
+    /// the connection and takes the end of the stream with it.
+    private func finish(_ socket: ClientConnection, unread: Unread) {
         socket.finishWriting()
 
         var remaining: Int?

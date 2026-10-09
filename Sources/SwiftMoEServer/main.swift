@@ -249,6 +249,9 @@ func main() throws {
                 expertFDs: expertFDs,
                 layerWeights: layerWeights,
                 use2Bit: serverConfig.use2Bit,
+                // Asked before every token, prompt tokens included: a client that has left
+                // stops costing GPU time at the next token instead of at the end.
+                shouldContinue: { !writer.clientHasDisconnected },
                 onToken: { token in
                     // In demo mode, map token ID to a character for visible output
                     let ch = String(UnicodeScalar(UInt8(token % 128)))
@@ -262,6 +265,10 @@ func main() throws {
             return
         }
 
+        guard !writer.clientHasDisconnected else {
+            logger.info("[request] client left; generation stopped")
+            return
+        }
         writer.sendFinish()
         writer.sendDone()
         logger.info("[request] done")

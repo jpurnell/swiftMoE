@@ -73,10 +73,33 @@ extension HTTPServer {
         /// is read and thrown away — never buffered — until it ends or this much time has gone.
         public var refusalDrainDeadline: Duration = .seconds(2)
 
+        /// Longest a validated request waits for the model before it is turned away. Default 30 s.
+        ///
+        /// One request runs at a time. The rest wait their turn, each holding a connection;
+        /// a request whose turn has not come by this deadline is answered 503 with
+        /// `Retry-After` and its connection is released. Thirty seconds is one default-sized
+        /// completion — 100 tokens at the measured 4.4 per second is 23 s — so a request behind
+        /// an ordinary one is served and a request behind a half-hour one is told promptly.
+        public var queueDeadline: Duration = .seconds(30)
+
+        /// Seconds a turned-away client is told to wait: ``queueDeadline`` rounded up to a
+        /// whole second, and never less than one.
+        public var retryAfterSeconds: Int {
+            let milliseconds = ClientConnection.milliseconds(queueDeadline)
+            let (rounded, overflow) = milliseconds.addingReportingOverflow(Self.millisecondsPerSecond - 1)
+            let seconds = (overflow ? milliseconds : rounded) / Self.millisecondsPerSecond
+            return Int(clamping: max(1, seconds))
+        }
+
+        private static let millisecondsPerSecond: Int64 = 1000
+
         /// Most connections being read at once. Default 16.
         ///
         /// Inference itself is one request at a time; this bounds how many clients may be
-        /// connected and part-way through sending. One more is answered 503.
+        /// connected at all — sending, waiting for the model, or being answered. One more is
+        /// answered 503 with `Retry-After`. It is also what bounds the queue for the model:
+        /// every waiting request is one of these connections, so at most `maxConnections - 1`
+        /// can be waiting behind the one that is running.
         public var maxConnections: Int = 16
 
         /// Creates the default limits.
@@ -111,6 +134,7 @@ extension HTTPServer {
                 ("readDeadline", readDeadline),
                 ("writeDeadline", writeDeadline),
                 ("refusalDrainDeadline", refusalDrainDeadline),
+                ("queueDeadline", queueDeadline),
             ]
             for (name, value) in deadlines where value <= .zero {
                 throw HTTPServerError.invalidLimit(name: name)

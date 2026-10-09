@@ -12,6 +12,49 @@ struct HandlerCall: Equatable, Sendable {
 /// What the stub handler does once it has recorded a call.
 typealias StubResponse = @Sendable (HTTPServer.Request, SSEWriter) -> Void
 
+/// The events a server under test reported, and a way to wait for the next one of a kind.
+///
+/// Tests that need the server to have reached a state — a request queued, a slot released —
+/// wait here for the server to say so, not for an interval after which it probably has.
+final class ServerEvents: Sendable {
+
+    /// How long a wait lasts before the test reports that the event never came.
+    private static let allowance: DispatchTimeInterval = .seconds(10)
+
+    private let log = OSAllocatedUnfairLock<[HTTPServerEvent]>(initialState: [])
+    private let signals: [HTTPServerEvent: DispatchSemaphore]
+
+    init() {
+        var signals: [HTTPServerEvent: DispatchSemaphore] = [:]
+        for event in HTTPServerEvent.allCases {
+            signals[event] = DispatchSemaphore(value: 0)
+        }
+        self.signals = signals
+    }
+
+    func record(_ event: HTTPServerEvent) {
+        log.withLock { $0.append(event) }
+        signals[event]?.signal()
+    }
+
+    /// Waits for one occurrence of `event` that no earlier call has consumed.
+    ///
+    /// - Returns: `false`, having recorded an issue, when none arrived within the allowance.
+    @discardableResult
+    func awaitNext(_ event: HTTPServerEvent, sourceLocation: SourceLocation = #_sourceLocation) -> Bool {
+        guard let signal = signals[event], signal.wait(timeout: .now() + Self.allowance) == .success else {
+            Issue.record("the server never reported \(event)", sourceLocation: sourceLocation)
+            return false
+        }
+        return true
+    }
+
+    /// How many times `event` has been reported.
+    func count(of event: HTTPServerEvent) -> Int {
+        log.withLock { $0.filter { $0 == event }.count }
+    }
+}
+
 /// A real ``HTTPServer`` on a loopback ephemeral port, accepting on its own thread.
 ///
 /// The handler is a stub: it records what it was called with and answers with an empty event
@@ -27,6 +70,8 @@ final class RunningServer: Sendable {
 
     let server: HTTPServer
     let bound: HTTPServer.BoundAddress
+    /// What the server has reported about its connections.
+    let events = ServerEvents()
     private let calls = OSAllocatedUnfairLock<[HandlerCall]>(initialState: [])
     private let requests = OSAllocatedUnfairLock<[HTTPServer.Request]>(initialState: [])
     private let finished = DispatchSemaphore(value: 0)
@@ -58,8 +103,10 @@ final class RunningServer: Sendable {
             : .unauthenticatedLoopback
         let calls = self.calls
         let requests = self.requests
-        let server = HTTPServer(port: 0, authentication: authentication, allowedOrigins: allowedOrigins,
-                                limits: limits, tokenizer: tokenizer) { request, writer in
+        let events = self.events
+        let server = HTTPServer(host: HTTPServer.loopbackHost, port: 0, authentication: authentication,
+                                allowedOrigins: allowedOrigins, limits: limits, tokenizer: tokenizer,
+                                observer: { events.record($0) }) { request, writer in
             calls.withLock { $0.append(HandlerCall(prompt: request.prompt, maxTokens: request.maxTokens)) }
             requests.withLock { $0.append(request) }
             respond(request, writer)
@@ -266,6 +313,14 @@ enum Expected {
                                   "The request was not received within the read deadline.")
     static let malformed = refusal("400 Bad Request", "Malformed HTTP request.")
     static let notJSON = refusal("400 Bad Request", "Request body is not a JSON object.")
+    /// The connection limit's refusal, with the default limits' `Retry-After`.
     static let busy = refusal("503 Service Unavailable", "The server is at its connection limit.",
-                              type: "server_error")
+                              type: "server_error", headers: ["Retry-After: 30"])
+
+    /// What a request is told when its turn did not come within the queue deadline.
+    static func queueTimedOut(retryAfter seconds: Int) -> String {
+        refusal("503 Service Unavailable",
+                "The server is busy with another request and could not start this one in time. Try again later.",
+                type: "server_error", headers: ["Retry-After: \(seconds)"])
+    }
 }

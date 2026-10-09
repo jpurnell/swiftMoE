@@ -101,6 +101,73 @@ struct ClientConnection {
         return true
     }
 
+    /// Whether the peer has closed its side, or the socket has failed.
+    ///
+    /// - Parameter wait: How long to wait for that to happen; zero only looks.
+    /// - Returns: `true` once the peer is gone. See ``peerHasClosed(descriptor:waitingUpTo:)``.
+    func peerHasClosed(waitingUpTo wait: Duration = .zero) -> Bool {
+        Self.peerHasClosed(descriptor: descriptor, waitingUpTo: wait)
+    }
+
+    /// Whether the peer of `descriptor` has closed its side, or the socket has failed.
+    ///
+    /// For use once a request has been read in full: nothing more is expected from the
+    /// client, so end-of-stream means it has hung up, and anything else it sends is read and
+    /// thrown away — at most 16 KiB a call — so that the end-of-stream behind it can be seen.
+    ///
+    /// A client that shuts only its sending side looks exactly like one that has closed: the
+    /// kernel reports the same end-of-stream for both, and the only way to tell them apart is
+    /// to write to it. It is counted as gone, as nginx and Go's `net/http` count it.
+    ///
+    /// - Parameters:
+    ///   - descriptor: A connected socket. Anything that is not a socket is never "closed".
+    ///   - wait: How long to wait for the peer to go; zero only looks.
+    /// - Returns: `true` once the peer is gone, `false` if it is still there when the wait ends.
+    static func peerHasClosed(descriptor: Int32, waitingUpTo wait: Duration) -> Bool {
+        let deadline = ContinuousClock.now + wait
+        // Always looks once; looks again only while there is time left to wait.
+        var remaining = max(0, milliseconds(wait))
+        var looked = false
+        while !looked || remaining > 0 {
+            looked = true
+            var descriptors = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptors, 1, Int32(clamping: remaining))
+            if ready > 0, discardPending(descriptor) == .endOfStream {
+                return true
+            }
+            if ready < 0, errno != EINTR {
+                return true
+            }
+            remaining = max(0, milliseconds(deadline - ContinuousClock.now))
+        }
+        return false
+    }
+
+    /// What a non-blocking read of whatever the peer has sent found.
+    private enum Pending {
+        /// The peer has closed, or the socket has failed.
+        case endOfStream
+        /// The peer is still there; any bytes it had sent were discarded.
+        case stillOpen
+    }
+
+    /// Reads and drops up to 16 KiB without blocking.
+    private static func discardPending(_ descriptor: Int32) -> Pending {
+        var received = 0
+        var failure: Int32 = 0
+        _ = [UInt8](unsafeUninitializedCapacity: maxReadBytes) { buffer, initialized in
+            initialized = 0
+            guard let base = buffer.baseAddress else { return }
+            received = recv(descriptor, base, buffer.count, MSG_DONTWAIT)
+            failure = errno
+        }
+        if received > 0 { return .stillOpen }
+        if received == 0 { return .endOfStream }
+        // Nothing to read yet, an interrupted call, or not a socket at all: no evidence of a close.
+        let inconclusive = [EAGAIN, EWOULDBLOCK, EINTR, ENOTSOCK]
+        return inconclusive.contains(failure) ? .stillOpen : .endOfStream
+    }
+
     /// Shuts the write side, so the peer sees the response end while this side can still read.
     func finishWriting() {
         shutdown(descriptor, SHUT_WR)
