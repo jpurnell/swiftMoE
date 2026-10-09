@@ -9,6 +9,9 @@ struct HandlerCall: Equatable, Sendable {
     let maxTokens: Int
 }
 
+/// What the stub handler does once it has recorded a call.
+typealias StubResponse = @Sendable (HTTPServer.Request, SSEWriter) -> Void
+
 /// A real ``HTTPServer`` on a loopback ephemeral port, accepting on its own thread.
 ///
 /// The handler is a stub: it records what it was called with and answers with an empty event
@@ -25,22 +28,41 @@ final class RunningServer: Sendable {
     let server: HTTPServer
     let bound: HTTPServer.BoundAddress
     private let calls = OSAllocatedUnfairLock<[HandlerCall]>(initialState: [])
+    private let requests = OSAllocatedUnfairLock<[HTTPServer.Request]>(initialState: [])
     private let finished = DispatchSemaphore(value: 0)
 
+    /// The tokenizer the server is given unless a test says otherwise: one token per UTF-8 byte.
+    static let byteTokenizer: HTTPServer.Tokenizer = { prompt in prompt.utf8.map { Int($0) } }
+
+    /// The stub's whole answer: stream headers, then `[DONE]`.
+    static let emptyStream: StubResponse = { _, writer in
+        writer.sendHeaders()
+        writer.sendDone()
+    }
+
+    /// - Parameters:
+    ///   - authenticated: Whether the server requires ``key``.
+    ///   - allowedOrigins: The origin allowlist.
+    ///   - limits: The server's limits.
+    ///   - tokenizer: How the server counts a prompt.
+    ///   - respond: What the handler does after recording the call.
     init(
         authenticated: Bool = true,
         allowedOrigins: [String] = [],
-        limits: HTTPServer.Limits = HTTPServer.Limits()
+        limits: HTTPServer.Limits = HTTPServer.Limits(),
+        tokenizer: @escaping HTTPServer.Tokenizer = RunningServer.byteTokenizer,
+        respond: @escaping StubResponse = RunningServer.emptyStream
     ) throws {
         let authentication: HTTPServer.Authentication = authenticated
             ? .bearer(BearerCredential(key: try APIKey(Self.key)))
             : .unauthenticatedLoopback
         let calls = self.calls
-        let server = HTTPServer(port: 0, authentication: authentication,
-                                allowedOrigins: allowedOrigins, limits: limits) { prompt, maxTokens, writer in
-            calls.withLock { $0.append(HandlerCall(prompt: prompt, maxTokens: maxTokens)) }
-            writer.sendHeaders()
-            writer.sendDone()
+        let requests = self.requests
+        let server = HTTPServer(port: 0, authentication: authentication, allowedOrigins: allowedOrigins,
+                                limits: limits, tokenizer: tokenizer) { request, writer in
+            calls.withLock { $0.append(HandlerCall(prompt: request.prompt, maxTokens: request.maxTokens)) }
+            requests.withLock { $0.append(request) }
+            respond(request, writer)
         }
         self.server = server
         self.bound = try server.openListener()
@@ -58,6 +80,9 @@ final class RunningServer: Sendable {
 
     /// Everything the handler has been called with so far, in order.
     var handlerCalls: [HandlerCall] { calls.withLock { $0 } }
+
+    /// The requests the handler received, in order, with the tokens the server counted.
+    var handledRequests: [HTTPServer.Request] { requests.withLock { $0 } }
 
     /// `127.0.0.1:<port>` — the authority a well-behaved local client sends as `Host`.
     var authority: String { "\(bound.host):\(bound.port)" }

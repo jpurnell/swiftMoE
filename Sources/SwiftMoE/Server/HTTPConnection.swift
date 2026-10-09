@@ -19,9 +19,9 @@ struct SerializedHandler: @unchecked Sendable {
         self.handler = handler
     }
 
-    func callAsFunction(prompt: String, maxTokens: Int, writer: SSEWriter) {
+    func callAsFunction(_ request: HTTPServer.Request, writer: SSEWriter) {
         lock.withLock {
-            handler(prompt, maxTokens, writer)
+            handler(request, writer)
         }
     }
 }
@@ -40,6 +40,8 @@ struct SerializedHandler: @unchecked Sendable {
 /// 7. The declared body length is present and within the limit (411, 501, 413).
 /// 8. The body arrives within the same deadline (408, 400) and is a JSON object (400).
 /// 9. The token count is a whole number in range (400).
+/// 10. The prompt, counted by the server's tokenizer, and the token count together fit in a
+///     sequence (400).
 ///
 /// Only then does the handler run. The body is not read until step 8, so an unauthenticated
 /// caller can make the server read at most ``HTTPServer/Limits/maxHeaderBytes``.
@@ -57,6 +59,7 @@ struct HTTPConnectionProcessor: Sendable {
     let authentication: HTTPServer.Authentication
     let allowedOrigins: [String]
     let limits: HTTPServer.Limits
+    let tokenizer: HTTPServer.Tokenizer
     let handler: SerializedHandler
 
     // MARK: - Entry points
@@ -189,9 +192,20 @@ struct HTTPConnectionProcessor: Sendable {
         switch ChatRequest.parse(body, limits: limits) {
         case .failure(let rejection):
             refuse(socket, rejection.refusal, corsHeaders: corsHeaders, unread: .none)
-        case .success(let request):
+        case .success(let chat):
+            let promptTokens = tokenizer(chat.prompt)
+            // `maxTokens` is at most `maxSequenceTokens`, so the subtraction cannot go below zero.
+            guard promptTokens.count <= limits.maxSequenceTokens - chat.maxTokens else {
+                let refusal = HTTPRefusal.sequenceTooLong(promptTokens: promptTokens.count,
+                                                          completionTokens: chat.maxTokens,
+                                                          limit: limits.maxSequenceTokens)
+                refuse(socket, refusal, corsHeaders: corsHeaders, unread: .none)
+                return
+            }
+            let request = HTTPServer.Request(prompt: chat.prompt, promptTokens: promptTokens,
+                                             maxTokens: chat.maxTokens)
             let writer = SSEWriter(fileDescriptor: socket.descriptor, extraHeaders: corsHeaders)
-            handler(prompt: request.prompt, maxTokens: request.maxTokens, writer: writer)
+            handler(request, writer: writer)
         }
     }
 

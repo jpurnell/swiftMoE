@@ -9,7 +9,7 @@ import Foundation
 /// ```
 ///
 /// Each token is sent as a separate SSE event. The stream ends with `data: [DONE]`.
-public struct SSEWriter {
+public struct SSEWriter: Sendable {
     private let fileDescriptor: Int32
     private let requestID: String
     /// Header lines the server adds for this request — the CORS headers for an allowed origin.

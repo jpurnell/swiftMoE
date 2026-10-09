@@ -27,7 +27,11 @@ private let logger = Logger(subsystem: "com.swiftmoe", category: "server")
 ///
 /// ```swift
 /// let key = try APIKey(String(repeating: "k", count: 32))
-/// let server = HTTPServer(port: 8080, authentication: .bearer(BearerCredential(key: key))) { prompt, maxTokens, writer in
+/// let server = HTTPServer(
+///     port: 8080,
+///     authentication: .bearer(BearerCredential(key: key)),
+///     tokenizer: { prompt in prompt.utf8.map(Int.init) }
+/// ) { request, writer in
 ///     writer.sendHeaders()
 ///     writer.sendDone()
 /// }
@@ -82,10 +86,41 @@ public final class HTTPServer: Sendable {
     /// Port to listen on. `0` asks the kernel for a free port; see ``boundAddress``.
     public let port: UInt16
 
-    /// Called for each incoming chat request. Return the prompt string.
+    /// A chat-completions request that passed every check, as the handler receives it.
+    public struct Request: Equatable, Sendable {
+        /// Content of the last message, or `""` when there is none.
+        public let prompt: String
+        /// ``prompt`` as the server's ``Tokenizer`` split it. These are the tokens the sequence
+        /// budget was checked against, so they are the ones to generate from.
+        public let promptTokens: [Int]
+        /// Tokens to generate: within ``Limits/maxCompletionTokens``, and, added to
+        /// ``promptTokens``, within ``Limits/maxSequenceTokens``.
+        public let maxTokens: Int
+
+        /// Creates a request.
+        ///
+        /// - Parameters:
+        ///   - prompt: Content of the last message.
+        ///   - promptTokens: The prompt's tokens.
+        ///   - maxTokens: Tokens to generate.
+        public init(prompt: String, promptTokens: [Int], maxTokens: Int) {
+            self.prompt = prompt
+            self.promptTokens = promptTokens
+            self.maxTokens = maxTokens
+        }
+    }
+
+    /// Splits a prompt into the tokens the model will be given.
+    ///
+    /// The server calls it once per request, on the connection's own thread and possibly for
+    /// several requests at once, before the request waits for the model. It decides how long
+    /// a prompt is, which is why it is the server's and not the handler's: a length checked
+    /// with one tokenizer and generated with another is not checked.
+    public typealias Tokenizer = @Sendable (_ prompt: String) -> [Int]
+
+    /// Called for each chat request that passed every check, one call at a time.
     public typealias RequestHandler = (
-        _ prompt: String,
-        _ maxTokens: Int,
+        _ request: Request,
         _ sseWriter: SSEWriter
     ) -> Void
 
@@ -131,6 +166,8 @@ public final class HTTPServer: Sendable {
     ///   - authentication: How callers are authenticated. Deliberately without a default.
     ///   - allowedOrigins: Origins, as `scheme://host[:port]`, whose pages may call the server.
     ///   - limits: Bounds on a request and a connection.
+    ///   - tokenizer: Splits a prompt into tokens. Deliberately without a default: the
+    ///     sequence budget is only as true as the count it is given.
     ///   - handler: Callback invoked for each chat completion request, one at a time, on a
     ///     background thread.
     public init(
@@ -139,6 +176,7 @@ public final class HTTPServer: Sendable {
         authentication: Authentication,
         allowedOrigins: [String] = [],
         limits: Limits = Limits(),
+        tokenizer: @escaping Tokenizer,
         handler: @escaping RequestHandler
     ) {
         self.host = host
@@ -150,6 +188,7 @@ public final class HTTPServer: Sendable {
             authentication: authentication,
             allowedOrigins: allowedOrigins,
             limits: limits,
+            tokenizer: tokenizer,
             handler: SerializedHandler(handler)
         )
         self.connectionSlots = DispatchSemaphore(value: max(0, limits.maxConnections))

@@ -215,23 +215,36 @@ func main() throws {
     logger.info("[server] Config: \(modelConfig.numLayers, privacy: .public) layers, \(modelConfig.numExperts, privacy: .public) experts, K=\(serverConfig.activeExperts, privacy: .public)")
 
     // ---- Start HTTP server ----
+    // Placeholder tokenizer for the demo: one token per UTF-8 byte, and one token for an
+    // empty prompt, because the generator needs something to start from.
+    let vocabSize = modelConfig.vocabSize
+    let tokenizer: HTTPServer.Tokenizer = { prompt in
+        let tokens = prompt.utf8.map { Int($0) % vocabSize }
+        return tokens.isEmpty ? [0] : tokens
+    }
+
+    // The sequence the server admits is the sequence this generator can hold.
+    var limits = HTTPServer.Limits()
+    limits.maxSequenceTokens = generator.maxSequenceLength
+    limits.maxCompletionTokens = min(limits.maxCompletionTokens, generator.maxSequenceLength)
+    limits.defaultCompletionTokens = min(limits.defaultCompletionTokens, limits.maxCompletionTokens)
+
     let server = HTTPServer(
         host: serverConfig.host,
         port: serverConfig.port,
         authentication: authentication,
-        allowedOrigins: serverConfig.allowedOrigins
-    ) { prompt, maxTokens, writer in
-        logger.info("[request] prompt=\(prompt.prefix(80), privacy: .private)... maxTokens=\(maxTokens, privacy: .public)")
+        allowedOrigins: serverConfig.allowedOrigins,
+        limits: limits,
+        tokenizer: tokenizer
+    ) { request, writer in
+        logger.info("[request] prompt=\(request.prompt.prefix(80), privacy: .private)... promptTokens=\(request.promptTokens.count, privacy: .public) maxTokens=\(request.maxTokens, privacy: .public)")
 
         writer.sendHeaders()
 
-        // Tokenize (placeholder: use character codes for demo)
-        let promptTokens = Array(prompt.utf8).map { Int($0) % modelConfig.vocabSize }
-
         do {
             try generator.generate(
-                promptTokens: promptTokens.isEmpty ? [0] : promptTokens,
-                maxTokens: maxTokens,
+                promptTokens: request.promptTokens,
+                maxTokens: request.maxTokens,
                 weightFile: weightFile,
                 expertFDs: expertFDs,
                 layerWeights: layerWeights,

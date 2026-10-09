@@ -29,6 +29,8 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
     case invalidOrigin(String)
     /// A limit in ``HTTPServer/Limits`` is zero or negative.
     case invalidLimit(name: String)
+    /// One limit in ``HTTPServer/Limits`` is larger than another that bounds it.
+    case limitAboveLimit(name: String, ceiling: String)
     /// A command-line option that takes a value was given without one.
     case missingValue(option: String)
 
@@ -57,6 +59,8 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
             return "\"\(origin)\" is not an origin. Use scheme://host[:port] with no path, for example http://localhost:3000."
         case .invalidLimit(let name):
             return "The limit \(name) must be greater than zero."
+        case .limitAboveLimit(let name, let ceiling):
+            return "The limit \(name) must not be greater than \(ceiling)."
         case .missingValue(let option):
             return "\(option) requires a value."
         }

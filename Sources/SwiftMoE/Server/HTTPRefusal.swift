@@ -62,6 +62,21 @@ struct HTTPRefusal: Equatable, Sendable {
         HTTPRefusal("400 Bad Request", "\(field) must be a whole number from 1 to \(maximum).")
     }
 
+    /// A prompt and completion that together need more positions than a sequence holds.
+    ///
+    /// - Parameters:
+    ///   - promptTokens: Tokens in the prompt, as the server's tokenizer counted them.
+    ///   - completionTokens: Tokens the request asked to generate, or the default.
+    ///   - limit: The configured sequence limit.
+    static func sequenceTooLong(promptTokens: Int, completionTokens: Int, limit: Int) -> HTTPRefusal {
+        let (total, overflow) = promptTokens.addingReportingOverflow(completionTokens)
+        let sum = overflow ? "more than \(Int.max)" : String(total)
+        return HTTPRefusal(
+            "400 Bad Request",
+            "Prompt (\(promptTokens) tokens) plus completion (\(completionTokens) tokens) is \(sum) tokens; "
+                + "the limit for a sequence is \(limit). Shorten the prompt or lower max_tokens.")
+    }
+
     /// The JSON error body.
     var body: String {
         "{\"error\":{\"message\":\"\(Self.escape(message))\",\"type\":\"\(Self.escape(type))\"}}"
