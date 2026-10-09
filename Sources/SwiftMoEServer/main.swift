@@ -228,19 +228,26 @@ func main() throws {
         // Tokenize (placeholder: use character codes for demo)
         let promptTokens = Array(prompt.utf8).map { Int($0) % modelConfig.vocabSize }
 
-        generator.generate(
-            promptTokens: promptTokens.isEmpty ? [0] : promptTokens,
-            maxTokens: maxTokens,
-            weightFile: weightFile,
-            expertFDs: expertFDs,
-            layerWeights: layerWeights,
-            use2Bit: serverConfig.use2Bit,
-            onToken: { token in
-                // In demo mode, map token ID to a character for visible output
-                let ch = String(UnicodeScalar(UInt8(token % 128)))
-                return writer.sendDelta(token: ch)
-            }
-        )
+        do {
+            try generator.generate(
+                promptTokens: promptTokens.isEmpty ? [0] : promptTokens,
+                maxTokens: maxTokens,
+                weightFile: weightFile,
+                expertFDs: expertFDs,
+                layerWeights: layerWeights,
+                use2Bit: serverConfig.use2Bit,
+                onToken: { token in
+                    // In demo mode, map token ID to a character for visible output
+                    let ch = String(UnicodeScalar(UInt8(token % 128)))
+                    return writer.sendDelta(token: ch)
+                }
+            )
+        } catch {
+            // The stream ends without a finish reason or [DONE]: a truncated stream is what
+            // tells the client this is not a completed answer.
+            logger.error("[request] generation failed: \(String(describing: error), privacy: .public)")
+            return
+        }
 
         writer.sendFinish()
         writer.sendDone()

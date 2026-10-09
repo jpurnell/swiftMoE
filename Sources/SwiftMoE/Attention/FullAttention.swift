@@ -37,7 +37,7 @@ public enum FullAttention {
         qNormW: UnsafePointer<UInt16>?,
         kNormW: UnsafePointer<UInt16>?,
         output: UnsafeMutablePointer<Float>
-    ) {
+    ) throws {
         let numHeads = config.numAttentionHeads
         let numKVHeads = config.numKVHeads
         let headDim = config.headDim
@@ -101,7 +101,7 @@ public enum FullAttention {
         }
 
         // Update KV cache
-        kvCache.append(kPtr: UnsafePointer(kOut), vPtr: UnsafePointer(vOut))
+        try kvCache.append(kPtr: UnsafePointer(kOut), vPtr: UnsafePointer(vOut))
         let seqLen = kvCache.length
         let sqrtHeadDim = sqrtf(Float(headDim))
         let scale = sqrtHeadDim > 0 ? 1.0 / sqrtHeadDim : 0.0

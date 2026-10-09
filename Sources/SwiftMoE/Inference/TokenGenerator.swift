@@ -39,13 +39,22 @@ public final class TokenGenerator {
     /// Hidden state vector [HIDDEN_DIM].
     private var hidden: [Float]
 
+    /// Positions the KV caches were allocated for: the longest sequence, prompt and completion
+    /// together, that ``generate(promptTokens:maxTokens:weightFile:expertFDs:layerWeights:use2Bit:shouldContinue:onToken:)``
+    /// accepts.
+    public let maxSequenceLength: Int
+
+    /// Positions recorded so far in the current sequence: the fullest KV cache's length.
+    public var sequenceLength: Int {
+        kvCaches.map(\.length).max() ?? 0
+    }
+
     /// Positions the KV caches are allocated for unless a caller asks otherwise: 8192.
     ///
     /// This is `GPU_KV_SEQ` in `infer.m` — the GPU KV buffers are pre-allocated for this many
-    /// positions, and ``KVCache`` stops recording past its allocation rather than growing. A
-    /// sequence longer than this is therefore attended to incompletely, which makes it the
-    /// longest generation worth asking for; ``HTTPServer/Limits/maxCompletionTokens`` defaults
-    /// to it.
+    /// positions, and ``KVCache`` throws rather than grow past its allocation. It is therefore
+    /// the longest sequence, prompt and completion together, that can be generated;
+    /// ``HTTPServer/Limits/maxCompletionTokens`` defaults to it.
     public static let defaultMaxSequenceLength = 8192
 
     /// Creates a token generator with the given Metal context.
@@ -62,6 +71,7 @@ public final class TokenGenerator {
         self.config = config
         self.pipeline = LayerPipeline(context: context, config: config)
         self.activeExperts = activeExperts
+        self.maxSequenceLength = maxSeqLen
 
         let kvDim = config.numKVHeads * config.headDim  // 512
         self.kvCaches = (0..<config.numFullAttentionLayers).map { _ in
@@ -121,7 +131,17 @@ public final class TokenGenerator {
     ///   - expertFDs: Per-layer expert file descriptors (60 FDs).
     ///   - layerWeights: Pre-computed weight pointers for all 60 layers.
     ///   - use2Bit: Whether experts use 2-bit quantization (default `false`).
+    ///   - shouldContinue: Asked before every token, prompt and generated alike. Return `false`
+    ///     to abandon the generation — the caller has gone away, say. Prefill produces no
+    ///     tokens, so without this a long prompt could not be interrupted at all.
     ///   - onToken: Callback invoked for each generated token. Return `false` to stop.
+    /// - Throws: ``FlashMoEError/sequenceCapacityExceeded(capacity:required:)`` when
+    ///   `promptTokens.count + maxTokens` is more than ``maxSequenceLength``. It is thrown
+    ///   before any token is processed and leaves the generator's state as it was.
+    ///
+    /// Each call is a new sequence: the KV caches and linear-attention states are reset
+    /// first, so nothing of an earlier prompt is attended to by a later one. A `maxTokens`
+    /// below zero generates nothing.
     public func generate(
         promptTokens: [Int],
         maxTokens: Int,
@@ -129,8 +149,20 @@ public final class TokenGenerator {
         expertFDs: [Int32],
         layerWeights: [LayerWeightPointers],
         use2Bit: Bool = false,
+        shouldContinue: () -> Bool = { true },
         onToken: (Int) -> Bool
-    ) {
+    ) throws {
+        let completionBudget = max(0, maxTokens)
+        let (required, overflow) = promptTokens.count.addingReportingOverflow(completionBudget)
+        guard !overflow, required <= maxSequenceLength else {
+            throw FlashMoEError.sequenceCapacityExceeded(capacity: maxSequenceLength,
+                                                         required: overflow ? Int.max : required)
+        }
+
+        reset()
+        // An early exit, cancelled or thrown, must not leave a command buffer in flight.
+        defer { pipeline.discardDeferredExperts() }
+
         let hiddenDim = config.hiddenDim
         var logits = [Float](repeating: 0, count: config.vocabSize)
         var normed = [Float](repeating: 0, count: hiddenDim)
@@ -143,12 +175,13 @@ public final class TokenGenerator {
 
         // ---- Prefill: process all prompt tokens ----
         for (i, tokenID) in promptTokens.enumerated() {
-            hidden.withUnsafeMutableBufferPointer { hiddenBuf in
+            guard shouldContinue() else { return }
+            try hidden.withUnsafeMutableBufferPointer { hiddenBuf in
                 guard let hiddenPtr = hiddenBuf.baseAddress else { return }
 
                 Embedding.lookup(weightFile: weightFile, tokenID: tokenID, config: config, output: hiddenPtr)
 
-                forwardAllLayers(
+                try forwardAllLayers(
                     hiddenPtr: hiddenPtr,
                     layerWeights: layerWeights,
                     expertFDs: expertFDs,
@@ -166,11 +199,12 @@ public final class TokenGenerator {
         }
 
         // ---- Generation: produce new tokens ----
-        for _ in 0..<maxTokens {
-            hidden.withUnsafeMutableBufferPointer { hiddenBuf in
+        for _ in 0..<completionBudget {
+            guard shouldContinue() else { return }
+            try hidden.withUnsafeMutableBufferPointer { hiddenBuf in
                 guard let hiddenPtr = hiddenBuf.baseAddress else { return }
 
-                forwardAllLayers(
+                try forwardAllLayers(
                     hiddenPtr: hiddenPtr,
                     layerWeights: layerWeights,
                     expertFDs: expertFDs,
@@ -233,13 +267,13 @@ public final class TokenGenerator {
         expertFDs: [Int32],
         pos: Int,
         use2Bit: Bool
-    ) {
+    ) throws {
         for layer in 0..<config.numLayers {
             let isFull = config.isFullAttention(layer: layer)
             var kv: KVCache? = isFull ? kvCaches[config.fullAttentionIndex(layer: layer)] : nil
             var ls: LinearAttentionState? = isFull ? nil : linearStates[config.linearAttentionIndex(layer: layer)]
 
-            pipeline.forward(
+            try pipeline.forward(
                 layerIndex: layer,
                 hidden: hiddenPtr,
                 weights: layerWeights[layer],
