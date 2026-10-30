@@ -1,0 +1,2129 @@
+{
+  "exchanges" : [
+    {
+      "name" : "version_505",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Only HTTP/1.0 and HTTP/1.1 are supported.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "96"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 505 HTTP Version Not Supported"
+      }
+    },
+    {
+      "name" : "host_421_wrong_host",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The Host header does not name this server.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "97"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 421 Misdirected Request"
+      }
+    },
+    {
+      "name" : "host_421_wrong_port",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The Host header does not name this server.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "97"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 421 Misdirected Request"
+      }
+    },
+    {
+      "name" : "host_421_missing_host",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The Host header does not name this server.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "97"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 421 Misdirected Request"
+      }
+    },
+    {
+      "name" : "origin_403_no_allowlist",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Origin is not allowed.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "77"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 403 Forbidden"
+      }
+    },
+    {
+      "name" : "origin_403_not_on_allowlist",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Origin is not allowed.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "77"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 403 Forbidden"
+      }
+    },
+    {
+      "name" : "preflight_204_allowed_origin",
+      "recorded" : {
+        "body" : "",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Length",
+            "0"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Access-Control-Allow-Methods",
+            "POST"
+          ],
+          [
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type"
+          ],
+          [
+            "Access-Control-Allow-Origin",
+            "https://localhost:3000"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 204 No Content"
+      }
+    },
+    {
+      "name" : "preflight_403_disallowed_origin",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Origin is not allowed.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "77"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 403 Forbidden"
+      }
+    },
+    {
+      "name" : "preflight_404_other_route",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Access-Control-Allow-Origin",
+            "https://localhost:3000"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "name" : "auth_401_missing",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "auth_401_wrong_key",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "auth_401_wrong_scheme",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "auth_401_bearer_without_token",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "auth_200_lowercase_scheme_accepted",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "auth_401_malformed_key_short",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "auth_200_key_with_trailing_space_trimmed",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "auth_401_beats_404",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"A valid bearer credential is required.\",\"type\":\"authentication_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "92"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "WWW-Authenticate",
+            "Bearer"
+          ]
+        ],
+        "status" : "HTTP/1.1 401 Unauthorized"
+      }
+    },
+    {
+      "name" : "route_404_other_path",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "name" : "route_404_trailing_slash",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "name" : "route_200_query_string_ignored",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "route_405_get",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Method not allowed; use POST.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "84"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Allow",
+            "POST"
+          ]
+        ],
+        "status" : "HTTP/1.1 405 Method Not Allowed"
+      }
+    },
+    {
+      "name" : "route_405_put",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Method not allowed; use POST.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "84"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Allow",
+            "POST"
+          ]
+        ],
+        "status" : "HTTP/1.1 405 Method Not Allowed"
+      }
+    },
+    {
+      "name" : "route_405_options_without_origin",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Method not allowed; use POST.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "84"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Allow",
+            "POST"
+          ]
+        ],
+        "status" : "HTTP/1.1 405 Method Not Allowed"
+      }
+    },
+    {
+      "expectedToChange" : "A chunked upload may be accepted or refused by the kit; the old 501 was a limit of the hand-rolled reader (proposal section 7, spike S5)",
+      "name" : "transfer_encoding_501_chunked",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Transfer-Encoding is not supported; send Content-Length.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "111"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 501 Not Implemented"
+      }
+    },
+    {
+      "name" : "length_411_missing",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Content-Length is required.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "82"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 411 Length Required"
+      }
+    },
+    {
+      "name" : "length_400_not_a_number",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Malformed HTTP request.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "78"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "length_400_negative",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Malformed HTTP request.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "78"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_413_declared_over_limit",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request body exceeds the limit of 65536 bytes.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "101"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 413 Content Too Large"
+      }
+    },
+    {
+      "name" : "headers_431_too_large",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request headers exceed the limit of 512 bytes.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "101"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 431 Request Header Fields Too Large"
+      }
+    },
+    {
+      "name" : "request_line_400_garbage",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Malformed HTTP request.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "78"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "timeout_408_head_never_finishes",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The request was not received within the read deadline.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "109"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 408 Request Timeout"
+      }
+    },
+    {
+      "name" : "timeout_408_body_never_finishes",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The request was not received within the read deadline.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "109"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 408 Request Timeout"
+      }
+    },
+    {
+      "name" : "body_400_truncated_by_client_close",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The request body ended before Content-Length bytes arrived.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "114"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_400_not_json",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request body is not a JSON object.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "89"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_400_json_array",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request body is not a JSON object.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "89"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_400_empty",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request body is not a JSON object.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "89"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_400_json_string",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Request body is not a JSON object.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "89"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "body_200_no_messages",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt= maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_200_absent_uses_default",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_200_whole",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=7"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_200_whole_written_as_float",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=64"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_200_whole_written_with_exponent",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=10"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_200_null_is_absent",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_tokens_400_string",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_boolean",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_fractional",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_negative",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_zero",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_above_ceiling",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_astronomical",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_tokens_400_array",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_completion_tokens_200_whole",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=9"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "max_completion_tokens_400_fractional",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_completion_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "115"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_completion_tokens_400_boolean",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_completion_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "115"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_completion_tokens_400_zero",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_completion_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "115"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "max_completion_tokens_400_above_ceiling",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_completion_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "115"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "precedence_max_completion_tokens_wins",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=20"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "precedence_400_bad_max_tokens_beside_good_completion",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "104"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "precedence_400_bad_completion_beside_good_max_tokens",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"max_completion_tokens must be a whole number from 1 to 8192.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "115"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "prompt_is_last_message",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=last maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "prompt_non_string_content_is_empty",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt= maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "budget_200_exactly_at_limit",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=pppppppppppppppppppp...pppppppppppppppppppp (54 characters) maxTokens=10"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "budget_400_one_over_limit",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Prompt (55 tokens) plus completion (10 tokens) is 65 tokens; the limit for a sequence is 64. Shorten the prompt or lower max_tokens.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "187"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "budget_200_default_limits_exactly_at_limit",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=pppppppppppppppppppp...pppppppppppppppppppp (8092 characters) maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "budget_400_default_limits_one_over_limit",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Prompt (8093 tokens) plus completion (100 tokens) is 8193 tokens; the limit for a sequence is 8192. Shorten the prompt or lower max_tokens.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "194"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "budget_400_ceiling_completion_leaves_no_room",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Prompt (2 tokens) plus completion (8192 tokens) is 8194 tokens; the limit for a sequence is 8192. Shorten the prompt or lower max_tokens.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "192"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "budget_400_default_completion_is_counted",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"Prompt (55 tokens) plus completion (10 tokens) is 65 tokens; the limit for a sequence is 64. Shorten the prompt or lower max_tokens.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "187"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 400 Bad Request"
+      }
+    },
+    {
+      "name" : "sse_tokens_complete_stream",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\\"w\\\"\\n\\u0001\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=greet maxTokens=3"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_tokens_cors_allowed_origin",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Access-Control-Allow-Origin",
+            "https://localhost:3000"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_vary_origin_without_origin_header",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Vary",
+            "Origin"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_truncated_when_generation_fails",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tial\"},\"finish_reason\":null}]}\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_stub_empty_stream",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_unauthenticated_loopback",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "sse_demo_model_complete_stream",
+      "recorded" : {
+        "body" : "data: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\u0000\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\u0000\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\u0000\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"req_<ID>\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=3"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "busy_503_past_max_connections",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The server is at its connection limit.\",\"type\":\"server_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "84"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Retry-After",
+            "30"
+          ]
+        ],
+        "status" : "HTTP/1.1 503 Service Unavailable"
+      }
+    },
+    {
+      "name" : "queue_timeout_503_with_retry_after",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"The server is busy with another request and could not start this one in time. Try again later.\",\"type\":\"server_error\"}}",
+        "facts" : [
+          "handler called: prompt=hold maxTokens=100",
+          "held request was answered: HTTP/1.1 200 OK"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "140"
+          ],
+          [
+            "Connection",
+            "close"
+          ],
+          [
+            "Retry-After",
+            "1"
+          ]
+        ],
+        "status" : "HTTP/1.1 503 Service Unavailable"
+      }
+    },
+    {
+      "name" : "queue_runs_waiter_after_release_in_order",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hold maxTokens=100",
+          "handler called: prompt=second maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "client_leaves_while_queued",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "queued request abandoned: reported",
+          "connection of the abandoned request: freed",
+          "handler called: prompt=hold maxTokens=100",
+          "handler called: prompt=third maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    },
+    {
+      "name" : "client_leaves_mid_stream",
+      "recorded" : {
+        "body" : "",
+        "facts" : [
+          "handler observed clientHasDisconnected: true",
+          "generation stopped before its cap of 500 tokens: true"
+        ],
+        "headers" : [
+
+        ]
+      }
+    },
+    {
+      "expectedToChange" : "A malformed target becomes 400 malformed_target, OpenAI-shaped (proposal section 7)",
+      "name" : "target_404_double_slash",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "expectedToChange" : "A malformed target becomes 400 malformed_target, OpenAI-shaped (proposal section 7)",
+      "name" : "target_404_dot_segments",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "expectedToChange" : "A malformed target becomes 400 malformed_target, OpenAI-shaped (proposal section 7)",
+      "name" : "target_404_single_dot_segment",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "expectedToChange" : "A malformed target becomes 400 malformed_target, OpenAI-shaped (proposal section 7)",
+      "name" : "target_404_bad_percent_escape",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "expectedToChange" : "A malformed target becomes 400 malformed_target, OpenAI-shaped (proposal section 7)",
+      "name" : "target_404_truncated_percent_escape",
+      "recorded" : {
+        "body" : "{\"error\":{\"message\":\"No such route.\",\"type\":\"invalid_request_error\"}}",
+        "facts" : [
+          "handler not called"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "application/json"
+          ],
+          [
+            "Content-Length",
+            "69"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 404 Not Found"
+      }
+    },
+    {
+      "name" : "version_http10_request",
+      "recorded" : {
+        "body" : "data: [DONE]\n\n",
+        "facts" : [
+          "handler called: prompt=hi maxTokens=100"
+        ],
+        "headers" : [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "Cache-Control",
+            "no-cache"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ],
+        "status" : "HTTP/1.1 200 OK"
+      }
+    }
+  ],
+  "note" : "Recorded from the original hand-rolled HTTPServer at tag v0.1.0. These are the old server's bytes: never regenerate them to make a later server pass. Differences that are intended are listed on their exchange (expectedToChange) or in the test's headerChanges, with the reason."
+}

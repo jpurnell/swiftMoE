@@ -55,7 +55,8 @@ let package = Package(
 
         .testTarget(
             name: "SwiftMoETests",
-            dependencies: ["SwiftMoE"]
+            dependencies: ["SwiftMoE"],
+            exclude: ["Fixtures"]
         ),
     ]
 )
