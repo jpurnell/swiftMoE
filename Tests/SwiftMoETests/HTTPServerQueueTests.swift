@@ -11,32 +11,6 @@ import Testing
 @Suite("HTTP server queue and disconnects")
 struct HTTPServerQueueTests {
 
-    /// A stub handler that holds the model, for any request whose prompt is `hold`, until told
-    /// to let go.
-    private final class Hold: Sendable {
-        /// Generous enough that reaching it means the test has hung.
-        private static let allowance: DispatchTimeInterval = .seconds(30)
-
-        private let started = DispatchSemaphore(value: 0)
-        private let released = DispatchSemaphore(value: 0)
-
-        var respond: StubResponse {
-            { [self] request, writer in
-                if request.prompt == "hold" {
-                    started.signal()
-                    _ = released.wait(timeout: .now() + Self.allowance)
-                }
-                RunningServer.emptyStream(request, writer)
-            }
-        }
-
-        /// Waits until the handler is holding the model.
-        func awaitStarted() -> Bool { started.wait(timeout: .now() + Self.allowance) == .success }
-
-        /// Lets the held request finish.
-        func release() { released.signal() }
-    }
-
     private static func body(_ prompt: String) -> String {
         #"{"messages":[{"role":"user","content":"\#(prompt)"}]}"#
     }
