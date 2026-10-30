@@ -38,6 +38,11 @@ struct OpenAIError: Equatable, Sendable {
     static let lengthRequired = OpenAIError("411 Length Required", "Content-Length is required.")
     static let wrongHost = OpenAIError("421 Misdirected Request", "The Host header does not name this server.")
     static let expectationFailed = OpenAIError("417 Expectation Failed", "The expectation cannot be met.")
+    static let versionNotSupported = OpenAIError("505 HTTP Version Not Supported",
+                                                 "Only HTTP/1.0 and HTTP/1.1 are supported.")
+    /// One connection more than the service serves at once. The transport adds `Retry-After`.
+    static let busy = OpenAIError("503 Service Unavailable", "The server is at its connection limit.",
+                                  type: "server_error")
     static let internalError = OpenAIError("500 Internal Server Error", "The server could not complete the request.",
                                            type: "server_error")
 

@@ -41,7 +41,8 @@ public struct InferenceLimits: Sendable, Equatable {
     /// before any of it is read.
     public var maxBodyBytes: Int = 64 * 1024
 
-    /// How long the head, and then the body, of a request may each take to arrive. Default 10 s.
+    /// How long the head, and then the body, of a request may each take to arrive, and how long a
+    /// connection that sends nothing is kept before it is answered 408. Default 10 s.
     public var readDeadline: Duration = .seconds(10)
 
     /// How long one write of the stream may wait for the client to read before the stream is

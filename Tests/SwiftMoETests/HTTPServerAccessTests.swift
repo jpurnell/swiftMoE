@@ -84,7 +84,7 @@ struct HTTPServerAccessTests {
         defer { running.shutdown() }
 
         let declared = ["Content-Length: \(512 * 1024)"]
-        let refusal = Expected.refusal("413 Payload Too Large", "Request body exceeds the limit of 65536 bytes.")
+        let refusal = Expected.refusal("413 Content Too Large", "Request body exceeds the limit of 65536 bytes.")
         #expect(try running.exchange(running.request(key: RunningServer.wrongKey, extraHeaders: declared, body: nil)) == refusal)
         #expect(try running.exchange(running.request(extraHeaders: declared, body: nil)) == refusal)
         #expect(running.handlerCalls == [])

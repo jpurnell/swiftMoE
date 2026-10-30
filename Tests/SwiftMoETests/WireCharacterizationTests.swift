@@ -458,7 +458,7 @@ enum WireExchanges {
     // MARK: The decision ladder
 
     private static let ladder: [WireExchange] = [
-        plain("version_505", intended: "The kit's HTTP parser answers 400 Malformed HTTP request for an HTTP/2.0 request line; the old server answered 505 (not in proposal sections 3 or 7)") { target in
+        plain("version_505") { target in
             raw("POST /v1/chat/completions HTTP/2.0\r\nHost: 127.0.0.1:\(target.port)\r\n\r\n")
         },
         plain("host_421_wrong_host") { target in target.request(host: "evil.example") },
@@ -512,7 +512,7 @@ enum WireExchanges {
         plain("length_400_negative") { target in
             target.request(extraHeaders: ["Content-Length: -1"], body: nil)
         },
-        plain("body_413_declared_over_limit", intended: "The 413 status line reads Payload Too Large (the transport's reason phrase); the old one read Content Too Large") { target in
+        plain("body_413_declared_over_limit") { target in
             target.request(extraHeaders: ["Content-Length: 65537"], body: nil)
         },
         scenario("headers_431_too_large", intended: "The kit refuses a header limit below 1 KiB; the old server's test used 512 bytes, so this input cannot be replayed") {
@@ -675,7 +675,7 @@ enum WireExchanges {
     // MARK: Capacity, queueing, and clients that leave
 
     private static let capacity: [WireExchange] = [
-        scenario("busy_503_past_max_connections", intended: "KNOWN REGRESSION, caused by SwiftHTTPService 0.5.0 and not worked around here: the transport closes a connection past the cap without any response, so there is no 503 and no Retry-After (spike S5; proposal section 3 said to verify)") {
+        scenario("busy_503_past_max_connections") {
             let target = try makeWireTarget(profile { $0.maxConnections = 1 })
             defer { target.shutdown() }
             let holder = try ClientSocket(port: target.port)
@@ -885,7 +885,7 @@ struct WireCharacterizationTests {
                 #expect(exchange.expectedToChange == nil, "\(exchange.name) is listed twice")
             }
         }
-        #expect(WireExchanges.all.filter { $0.intended != nil }.count == 9)
+        #expect(WireExchanges.all.filter { $0.intended != nil }.count == 6)
         #expect(WireExchanges.all.filter { $0.expectedToChange != nil }.count == 6)
     }
 

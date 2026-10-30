@@ -16,7 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.3"),
-        .package(url: "https://github.com/jpurnell/SwiftHTTPService.git", .upToNextMinor(from: "0.5.0")),
+        .package(url: "https://github.com/jpurnell/SwiftHTTPService.git", .upToNextMinor(from: "0.6.0")),
         // Tests only: a real TLS handshake against the server, with certificates made when the tests run.
         .package(url: "git@github.com:jpurnell/SwiftTLSKit.git", .upToNextMinor(from: "0.2.1")),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.102.0"),

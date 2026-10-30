@@ -292,15 +292,19 @@ public final class ChatService: Sendable {
         transport.maximumBodyBytes = limits.maxBodyBytes
         transport.headerReadTimeout = limits.readDeadline
         transport.bodyReadTimeout = limits.readDeadline
+        // A connection that sends nothing is answered 408 at the same deadline.
+        transport.idleTimeout = limits.readDeadline
         transport.streamWriteTimeout = limits.writeDeadline
         transport.maximumConnections = limits.maxConnections
+        // The same Retry-After a refused connection used to get: the queue deadline in whole seconds.
+        transport.busyRetryAfter = .seconds(limits.retryAfterSeconds)
         transport.maximumStreamDuration = limits.maxStreamDuration
         transport.shutdownGrace = limits.shutdownGrace
 
         let configuration: ServiceConfiguration
         do {
             configuration = try ServiceConfiguration(host: host, port: port, tls: tls, limits: transport,
-                                                     protocols: .http1, connections: .closeAfterResponse)
+                                                     protocols: .http1, connectionReuse: .closeAfterResponse)
         } catch {
             logger.error("[server] configuration refused: \(error.field, privacy: .public)")
             throw ServiceError.invalidConfiguration(field: error.field)
@@ -380,6 +384,8 @@ public final class ChatService: Sendable {
         case .bodyTooLarge: .bodyTooLarge(limit: limits.maxBodyBytes)
         case .expectationFailed: .expectationFailed
         case .headersTooLarge: .headersTooLarge(limit: limits.maxHeaderBytes)
+        case .busy: .busy
+        case .versionNotSupported: .versionNotSupported
         case .internalError: .internalError
         }
     }

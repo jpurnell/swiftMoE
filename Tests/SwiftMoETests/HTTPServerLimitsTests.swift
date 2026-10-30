@@ -201,8 +201,6 @@ struct HTTPServerLimitsTests {
 
     // MARK: - Body size
 
-    // DIFFERENCE (SwiftHTTPService 0.5.0): the status line reads "Payload Too Large", the transport's
-    // reason phrase, where the old server wrote "Content Too Large".
     @Test("A body one byte over the limit is 413; the client receives it every time",
           arguments: 0..<20)
     func refusalIsDeliveredEveryTime(attempt: Int) throws {
@@ -213,7 +211,7 @@ struct HTTPServerLimitsTests {
 
         let oversized = String(repeating: "a", count: 512 * 1024)
         let response = try running.exchange(running.request(body: oversized))
-        #expect(response == Expected.refusal("413 Payload Too Large",
+        #expect(response == Expected.refusal("413 Content Too Large",
                                              "Request body exceeds the limit of 1024 bytes."))
         #expect(running.handlerCalls == [])
     }
@@ -228,7 +226,7 @@ struct HTTPServerLimitsTests {
 
         #expect(try running.exchange(running.request(body: atLimit)) == Expected.stream())
         #expect(try running.exchange(running.request(body: atLimit + " "))
-            == Expected.refusal("413 Payload Too Large",
+            == Expected.refusal("413 Content Too Large",
                                 "Request body exceeds the limit of \(atLimit.utf8.count) bytes."))
         #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 100)])
     }
@@ -298,9 +296,7 @@ struct HTTPServerLimitsTests {
         let silent = try ClientSocket(port: running.port)
         defer { silent.close() }
         // The client never writes. The read below returns only because the server gave up.
-        // DIFFERENCE (SwiftHTTPService 0.5.0): the transport's head deadline starts at the first byte, so
-        // a client that never sends one is closed by the idle deadline with no response, not 408.
-        #expect(silent.readToEnd() == "")
+        #expect(Canonical.normalise(silent.readToEnd()) == Expected.timedOut)
         #expect(running.handlerCalls == [])
     }
 
@@ -347,10 +343,25 @@ struct HTTPServerLimitsTests {
         let holder = try ClientSocket(port: running.port)
         defer { holder.close() }
 
-        // DIFFERENCE (SwiftHTTPService 0.5.0): a connection past the cap is closed with no response, so
-        // there is no 503 and no Retry-After (spike S5).
-        #expect(try running.rawExchange(running.request()) == "")
+        #expect(try running.exchange(running.request()) == Expected.busy)
         #expect(running.handlerCalls == [])
+    }
+
+    @Test("The Retry-After of a refused connection is the queue deadline in whole seconds, rounded up",
+          arguments: [(Duration.milliseconds(7200), 8), (.seconds(30), 30), (.milliseconds(900), 1)])
+    func connectionLimitRetryAfter(deadline: Duration, seconds: Int) throws {
+        var limits = InferenceLimits()
+        limits.maxConnections = 1
+        limits.queueDeadline = deadline
+        let running = try RunningServer(limits: limits)
+        defer { running.shutdown() }
+
+        let holder = try ClientSocket(port: running.port)
+        defer { holder.close() }
+
+        #expect(try running.exchange(running.request()) == Expected.refusal(
+            "503 Service Unavailable", "The server is at its connection limit.",
+            type: "server_error", headers: ["Retry-After: \(seconds)"]))
     }
 
     // MARK: - Routing
@@ -425,15 +436,14 @@ struct HTTPServerLimitsTests {
         #expect(running.handlerCalls == [])
     }
 
-    // DIFFERENCE (SwiftHTTPService 0.5.0): the transport's parser reads HTTP/2.0 on an HTTP/1 line
-    // as malformed, so the answer is 400, where the old server answered 505.
-    @Test("An HTTP version other than 1.0 or 1.1 is refused")
+    @Test("An HTTP version other than 1.0 or 1.1 is 505")
     func unsupportedVersion() throws {
         let running = try RunningServer()
         defer { running.shutdown() }
 
         let bytes = Array("POST /v1/chat/completions HTTP/2.0\r\nHost: \(running.authority)\r\n\r\n".utf8)
-        #expect(try running.exchange(bytes) == Expected.malformed)
+        #expect(try running.exchange(bytes)
+            == Expected.refusal("505 HTTP Version Not Supported", "Only HTTP/1.0 and HTTP/1.1 are supported."))
     }
 }
 }

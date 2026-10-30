@@ -167,7 +167,7 @@ struct SpikeTests {
 
     // MARK: - S5: the cap, and a chunked upload
 
-    @Test("S5: past the connection cap the transport closes with no response, so there is no Retry-After")
+    @Test("S5 (kit 0.6.0): past the connection cap a plaintext client is told 503 with Retry-After")
     func connectionCap() throws {
         var limits = InferenceLimits()
         limits.maxConnections = 1
@@ -176,7 +176,7 @@ struct SpikeTests {
 
         let holder = try ClientSocket(port: running.port)
         defer { holder.close() }
-        #expect(try running.rawExchange(running.request()) == "")
+        #expect(try running.exchange(running.request()) == Expected.busy)
         #expect(running.handlerCalls == [])
     }
 
@@ -196,7 +196,7 @@ struct SpikeTests {
         #expect(try running.exchange(Self.chunked(small, running: running)) == Expected.stream())
         let large = #"{"messages":[{"role":"user","content":""# + String(repeating: "a", count: 70_000) + #""}]}"#
         let answer = try running.exchange(Self.chunked(large, running: running))
-        #expect(answer == Expected.refusal("413 Payload Too Large", "Request body exceeds the limit of 65536 bytes."))
+        #expect(answer == Expected.refusal("413 Content Too Large", "Request body exceeds the limit of 65536 bytes."))
         #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 100)])
     }
 }
