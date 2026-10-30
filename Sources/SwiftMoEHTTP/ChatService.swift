@@ -68,7 +68,7 @@ enum ChatServiceEvent: Hashable, CaseIterable, Sendable {
 /// A stream is bounded by ``InferenceLimits/maxStreamDuration`` (two hours by default).
 ///
 /// ```swift
-/// let service = ChatService(authentication: .unauthenticatedLoopback, port: 0,
+/// let service = ChatService(port: 0, authentication: .unauthenticatedLoopback,
 ///                           tokenizer: { prompt in prompt.utf8.map { Int($0) } }) { request, shouldContinue, emit in
 ///     for word in ["Hello", ", ", "world"] where shouldContinue() {
 ///         guard emit(word) else { return }
