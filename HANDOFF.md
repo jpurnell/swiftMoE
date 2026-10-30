@@ -1,16 +1,16 @@
 # HANDOFF — SwiftMoE
 
-**Last session:** 2026-10-30 (the HTTP server moved onto SwiftHTTPService, v0.2.0 — see `project/summaries/2026-10-30_HTTPOnKit.md`)
-**Branch:** `main` at `v0.2.0`
-**State:** Green. Quality gate 0/0, 254 tests in 40 suites, nothing in progress.
+**Last session:** 2026-10-30 (the HTTP server moved onto SwiftHTTPService, v0.2.0, then kit 0.6.0, v0.2.1 — see `project/summaries/2026-10-30_HTTPOnKit.md` and `2026-10-30_KitSixZero.md`)
+**Branch:** `main` at `v0.2.1`
+**State:** Green. Quality gate 0/0, 255 tests in 40 suites, nothing in progress.
 
 The raw-socket server is gone. `SwiftMoEHTTP` (new library) serves `POST /v1/chat/completions` on
 `SwiftHTTPService` 0.5.0: TLS in the process (`--tls-cert`, `--tls-key`, SIGHUP reload),
 `--allow-plaintext` removed, a two-hour bound on a response, graceful shutdown. `SwiftMoE` imports no
 networking.
 
-**Known regression, accepted:** a connection past `maxConnections` is closed with no `503` and no
-`Retry-After` (the kit). Eight other accepted differences are in the CHANGELOG under 0.2.0 "Changed".
+**The connection-cap regression is fixed** (0.2.1, kit 0.6.0): over the cap a plaintext client gets `503` with
+`Retry-After` = the queue deadline. Six accepted differences from 0.1.0 remain (CHANGELOG 0.2.1).
 
 **The next things** are the ones in "Next step" below; none is blocked by this release.
 
@@ -23,7 +23,7 @@ config exclusions:
 
 ```bash
 quality-gate --check all               # 49 of 49 checkers; 4 are not applicable and SKIP
-swift test                             # 254 tests, 40 suites, ~45 s (the server tests drive real sockets)
+swift test                             # 255 tests, 40 suites, ~20 s (the server tests drive real sockets)
 cd metal_infer && make                 # builds; 19 pre-existing warnings
 ```
 
@@ -99,8 +99,7 @@ From the quality-gate session (2026-08-25, `project/summaries/2026-08-25_Quality
 3. **`swift-moe-server --model`.** Not implemented; the server only serves `--demo`.
 4. **Performance benchmarking vs. the original C engine.** No Swift-side numbers exist yet.
    The C engine's baseline is 4.36 tok/s at 4-bit (see `CLAUDE.md`).
-5. The open server items in `project/master_plan.md` under Remaining: the connection-cap `503`
-   (needs a kit change), unauthenticated connection slots, and the mid-stream error event (decided:
+5. The open server items in `project/master_plan.md` under Remaining: unauthenticated connection slots, and the mid-stream error event (decided:
    keep the truncation).
 6. **Additional model presets** (DeepSeek-V3, Mixtral).
 

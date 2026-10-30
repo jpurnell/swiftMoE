@@ -14,7 +14,7 @@ Based on the [Flash-MoE](https://github.com/danveloper/flash-moe) inference engi
 
 ### Key Differentiators
 - **Model-agnostic**: Runtime `ModelConfig` with presets — no hardcoded architecture constants
-- **Fully tested**: 254 tests with tiny synthetic model fixtures (no 210GB download needed)
+- **Fully tested**: 255 tests with tiny synthetic model fixtures (no 210GB download needed)
 - **All GPU paths**: 7 GPU optimization paths with automatic CPU fallback
 - **Pure Swift**: No C dependencies in the main library, and no networking code in it either
 - **OpenAI-compatible**: `/v1/chat/completions` HTTP service (`SwiftMoEHTTP`, on SwiftHTTPService) with SSE
@@ -53,7 +53,7 @@ SwiftMoE/
 │                             ChatRequest, ChatChunk, OpenAIError
 ├── Sources/SwiftMoEServer/   HTTP server executable
 ├── Sources/SwiftMoEChat/     Interactive TUI executable
-├── Tests/SwiftMoETests/      254 tests; Fixtures/exchanges.json is the old server's recorded wire
+├── Tests/SwiftMoETests/      255 tests; Fixtures/exchanges.json is the old server's recorded wire
 └── metal_infer/              Original Obj-C reference implementation
 ```
 
@@ -135,10 +135,12 @@ SwiftMoE/
       Shipped 2026-10-30 in 0.2.0 as `InferenceLimits.maxStreamDuration`, two hours (decision O5):
       the longest completion the server will deliver, which is about four times the 31 minutes.
       A reader that stops reading ends its stream after the 30 s write deadline.
-- [ ] HTTP server, **known regression** (found 2026-10-30, accepted as intended, caused by the kit):
+- [x] ~~HTTP server, **known regression** (found 2026-10-30, accepted as intended, caused by the kit):
       a connection past `maxConnections` is closed with no response, so the old `503` with
-      `Retry-After` is gone. Needs a kit change to restore; eight other accepted differences are in
-      the CHANGELOG (0.2.0, "Changed") and proposal section 7
+      `Retry-After` is gone. Needs a kit change to restore~~ Fixed 2026-10-30 in 0.2.1 on kit 0.6.0
+      (plaintext: `503` with `Retry-After` = the queue deadline; over TLS the connection is closed
+      before the handshake, nothing can be written). The 505, the silent-client 408 and the 413
+      phrase came back with it. Six accepted differences remain (CHANGELOG 0.2.1).
 - [ ] HTTP server: the 16 connection slots can be held by clients that have not authenticated —
       each for at most the 10 s read deadline, but reconnecting costs nothing. There is no
       per-address limit; a fronting proxy is the place for one
@@ -158,21 +160,23 @@ SwiftMoE/
 - Zero compiler warnings
 - Quality gate clean at 0 errors / 0 warnings (`--check all`: 49 checkers, 4 of them not
   applicable to this package and skipped), no overrides
-- 254 tests, all passing
+- 255 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-10-30 — 0.2.0: the HTTP server moved onto SwiftHTTPService. Reconciled against
-the shipped code: the module table (a new `SwiftMoEHTTP` target; `Server/` keeps `SessionStore`),
-Current Status (the move), and Remaining. Struck through, with their reasoning kept: the TLS item
-(shipped by moving to the kit, which the 2026-10-09 note had said the raw-socket server would not
-do) and the whole-response-deadline item (a two-hour `maxStreamDuration`). The mid-stream error
-event stays open as the decided behaviour (O3). A new item records the connection-cap `503` that is
-gone and the other differences found by replaying the old server's recorded exchanges. Tests
-226 → 254 in 40 suites. The 2026-10-09 note that the raw-socket server "will not grow TLS of its own" was true of that server and was overtaken by replacing it.
+**Last Updated:** 2026-10-30 — 0.2.1: the kit moved to 0.6.0 and the connection-cap regression recorded for
+0.2.0 is fixed (struck through above, reasoning kept). Reconciled: Current Status, Remaining (six accepted
+differences remain, down from nine), tests 254 → 255.
+
+Earlier same day: 0.2.0 — the HTTP server moved onto SwiftHTTPService. Struck through, with their
+reasoning kept: the TLS item (shipped by moving to the kit, which the 2026-10-09 note had said the
+raw-socket server would not do) and the whole-response-deadline item (a two-hour `maxStreamDuration`).
+The mid-stream error event stays open as the decided behaviour (O3). The 2026-10-09 note that the
+raw-socket server "will not grow TLS of its own" was true of that server and was overtaken by
+replacing it.
 
 Earlier: 2026-10-09 — tagged v0.1.0, the first tag. Reconciled for the first release after the
 bounded-work fix: the prompt-length budget and the queued-request items shipped and are struck

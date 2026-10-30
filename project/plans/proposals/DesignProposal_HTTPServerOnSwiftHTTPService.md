@@ -1,6 +1,6 @@
 # Design Proposal: Move the HTTP server onto SwiftHTTPService
 
-**Status:** Implemented in v0.2.0 (2026-10-30). Approved by the owner 2026-10-30, with every recommendation below accepted (section 13 records the decisions); the differences the replay found beyond section 7 were accepted the same day and are the table at the end of section 7. **Author's note:** every claim about SwiftHTTPService (the kit) below was
+**Status:** Implemented in v0.2.0 and corrected in v0.2.1 on kit 0.6.0 (2026-10-30): rows 1, 3, 6 and the silent-client 408 of the table at the end of section 7 no longer differ. Approved by the owner 2026-10-30, with every recommendation below accepted (section 13 records the decisions); the differences the replay found beyond section 7 were accepted the same day and are the table at the end of section 7. **Author's note:** every claim about SwiftHTTPService (the kit) below was
 checked against its source at v0.4.1 (`Sources/SwiftHTTPService*`), and every claim about this server against
 `Sources/SwiftMoE/Server/*` and `Sources/SwiftMoEServer/main.swift` at `main` (tag `v0.1.0`). Where a claim rests on
 behaviour I could not confirm by reading, it is marked **verify** and has a spike in section 10.
@@ -190,12 +190,12 @@ were replayed against the new one (`WireCharacterizationTests`); these nine diff
 
 | # | Exchange | Old server | New server | Cause |
 |---|---|---|---|---|
-| 1 | A connection past `maxConnections` | `503` + `Retry-After: 30` | **Closed with no response** | The kit's registry drops the connection. **A known regression against the old server**, caused by the kit and not worked around in this package; clients see a reset and have no `Retry-After` to honour |
+| 1 | ~~A connection past `maxConnections`~~ **fixed in 0.2.1** | `503` + `Retry-After: 30` | ~~**Closed with no response**~~ `503` + `Retry-After` again (plaintext; over TLS closed before the handshake) | The kit's registry dropped the connection (0.5.0). **Was a known regression against the old server**, caused by the kit and not worked around in this package; clients see a reset and have no `Retry-After` to honour |
 | 2 | No `Host` header | `421` | `400 Malformed HTTP request.` | The transport requires exactly one `Host` before any middleware runs |
-| 3 | `HTTP/2.0` on an HTTP/1 request line | `505` | `400 Malformed HTTP request.` | The transport's parser |
+| 3 | ~~`HTTP/2.0` on an HTTP/1 request line~~ **fixed in 0.2.1** | `505` | ~~`400`~~ `505` again | The transport's parser |
 | 4 | A body shorter than its `Content-Length`; a client that sends nothing | `400`; `408` | Connection closed, no response | The transport; the head timer starts at the first byte, and a short body closes |
 | 5 | Preflight from an allowed origin for a path that is not the route | `404` | `204` (any path) | The kit's CORS layer answers every preflight itself; it also omits `Content-Length: 0` |
-| 6 | Status line for a body over the bound | `413 Content Too Large` | `413 Payload Too Large` | The transport's reason phrase |
+| 6 | ~~Status line for a body over the bound~~ **fixed in 0.2.1** | `413 Content Too Large` | ~~`413 Payload Too Large`~~ `Content Too Large` again | The transport's reason phrase |
 | 7 | A body declared over the bound, with a wrong or missing key | `401` | `413` | The route bound is checked before any middleware, so the body is refused unread (the property the old order protected) |
 | 8 | An `HTTP/1.0` request | Answered `HTTP/1.1` | Answered `HTTP/1.0` | The kit mirrors the client's version |
 | 9 | A header limit below 1 KiB | Accepted (the old test used 512) | `ServiceError.invalidConfiguration` | `ServiceConfiguration` bounds `maximumHeaderBytes` to 1 KiB or more |

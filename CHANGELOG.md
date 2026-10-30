@@ -4,6 +4,47 @@ All notable changes to SwiftMoE are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-30
+
+On SwiftHTTPService 0.6.0, which fixes the regression 0.2.0 recorded. No API change.
+
+### Fixed
+- ~~**Known regression (0.2.0): a connection past `maxConnections` is closed with no response**, with no
+  `503` and no `Retry-After`.~~ Kit 0.6.0 answers a plaintext connection over the cap with `503` and
+  `Retry-After`; `ChatService` gives it the old body (`The server is at its connection limit.`,
+  `server_error`) through `TransportRefusal.busy`, and sets `Limits.busyRetryAfter` to the queue
+  deadline in whole seconds, rounded up, so `Retry-After` is the old value (30 with the default
+  limits). Over TLS the connection is still closed before the handshake with nothing written: nothing
+  can be said to a client that has not completed it.
+- An `HTTP/2.0` request line is `505`, with the old body (`Only HTTP/1.0 and HTTP/1.1 are supported.`),
+  as it was before 0.2.0.
+- A connection that sends nothing is answered `408` at the read deadline (`idleTimeout` is set to
+  `readDeadline`), as before 0.2.0.
+- The `413` status line reads `Content Too Large` again (kit 0.6.0).
+
+### Changed
+- `ServiceConfiguration(connections:)` is `connectionReuse:` (the old name is a deprecated shim for one
+  kit release). The dependency is `.upToNextMinor(from: "0.6.0")`.
+- `TransportRefusal` gained `.busy` and `.versionNotSupported`; `ChatService` maps both.
+
+### Differences from 0.1.0 that remain (accepted, in `WireCharacterizationTests` as `intended`)
+Six, down from nine, each rechecked against the old fixture:
+- A request with no `Host` is `400`, not `421` (the transport refuses it before any middleware).
+- A body that ends before its `Content-Length` closes the connection with no `400`.
+- A preflight from an allowed origin is answered `204` for any path (was `404` for a path other than
+  the route).
+- The `204` preflight carries no `Content-Length: 0`.
+- An HTTP/1.0 request is answered `HTTP/1.0` (the old server answered `HTTP/1.1`).
+- A header limit below 1 KiB is refused at start-up (the old server's test used 512 bytes).
+
+Plus the six intended changes of 0.2.0 (malformed targets 400, chunked accepted, `Cache-Control:
+no-store`, chunked framing, `Date`, head and body each get the read deadline).
+
+### Verification
+255 tests in 40 suites. Hand mutation of the new pieces, all killed: X1 `busyRetryAfter` not wired
+(kit default 1 s); X2 `busyRetryAfter` a constant; X3 busy mapped to the internal-error body; X4 505
+mapped to the malformed body; X5 idle deadline left at the kit default; X6 busy message changed.
+
 ## [0.2.0] - 2026-10-30
 
 The HTTP server moves onto [SwiftHTTPService](https://github.com/jpurnell/SwiftHTTPService) 0.5.0.
@@ -74,15 +115,15 @@ Found by replaying the old server's recorded exchanges and accepted as intended 
 table is in `WireCharacterizationTests`, which fails on any difference not in it, and in section 7
 of the proposal). All are the kit's behaviour at 0.5.0; none is worked around in this package.
 
-- **Known regression: a connection past `maxConnections` is closed with no response.** There is no
+- ~~**Known regression: a connection past `maxConnections` is closed with no response.**~~ *(fixed in 0.2.1 on kit 0.6.0)* There is no
   `503` and no `Retry-After` any more (spike S5). A client sees a reset and has nothing to honour.
 - A request with no `Host` is `400`, not `421` (the transport refuses it before any middleware).
-- An `HTTP/2.0` request line is `400`, not `505`.
+- ~~An `HTTP/2.0` request line is `400`, not `505`.~~ *(fixed in 0.2.1)*
 - A body that ends before its `Content-Length` closes the connection with no `400`; a client that
-  connects and sends nothing is closed at the idle deadline with no `408`.
+  connects and sends nothing is closed at the idle deadline with no `408` *(the 408 is back in 0.2.1)*.
 - A preflight from an allowed origin is answered `204` for any path (was `404` for a path other than
   the route), and carries no `Content-Length: 0`.
-- The `413` status line reads `Payload Too Large` (was `Content Too Large`).
+- ~~The `413` status line reads `Payload Too Large` (was `Content Too Large`).~~ *(fixed in 0.2.1)*
 - A body declared over the bound is `413` before the credential is checked (was `401`); either way it
   is refused unread.
 - An HTTP/1.0 request is answered `HTTP/1.0` (the old server answered `HTTP/1.1`).
@@ -403,6 +444,7 @@ read the answer, and let one client decide how much work it did and for how long
   server blocked it forever; the wait is now bounded and cancels the request
 - Conv1d state shift in linear attention
 
-[Unreleased]: https://github.com/jpurnell/swiftMoE/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jpurnell/swiftMoE/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jpurnell/swiftMoE/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jpurnell/swiftMoE/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jpurnell/swiftMoE/releases/tag/v0.1.0

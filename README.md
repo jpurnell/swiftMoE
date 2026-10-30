@@ -13,11 +13,11 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 - **Runtime Configurable** -- `ModelConfig` presets for any MoE architecture (Qwen, DeepSeek, etc.)
 - **OpenAI-Compatible Server** -- `/v1/chat/completions` with SSE streaming, bearer-key authentication, and a bound on everything a request can cost
 - **Pure Swift** -- No Python, no ML frameworks, no C dependencies (except optional linenoise for TUI)
-- **254 Tests** -- Tiny synthetic model fixtures; the server is tested over a real loopback socket
+- **255 Tests** -- Tiny synthetic model fixtures; the server is tested over a real loopback socket
 
 ## Status
 
-Pre-1.0: the current version is 0.2.0 (0.1.0 was the first tag). The engine is verified against synthetic fixtures
+Pre-1.0: the current version is 0.2.1 (0.1.0 was the first tag). The engine is verified against synthetic fixtures
 and a CPU reference; it has **not** yet been run against the real Qwen3.5-397B weights, and
 `swift-moe-server` serves only the synthetic `--demo` model (`--model` is not implemented).
 
@@ -32,7 +32,7 @@ As a package dependency:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jpurnell/swiftMoE", from: "0.2.0"),
+    .package(url: "https://github.com/jpurnell/swiftMoE", from: "0.2.1"),
 ],
 targets: [
     .target(name: "YourTarget", dependencies: [.product(name: "SwiftMoE", package: "swiftMoE")]),
@@ -140,7 +140,7 @@ exactly). On loopback the `Host` header must be `127.0.0.1:<port>` or `localhost
 | Request line and headers | 16 KiB | `431` |
 | Time to send the request head, and then the body (each) | 10 s | `408` |
 | Time waiting for the model behind another request | 30 s | `503` with `Retry-After` |
-| Connections at once — sending, waiting, or being answered | 16 | the connection is closed with no response |
+| Connections at once — sending, waiting, or being answered | 16 | `503` with `Retry-After` (plaintext; over TLS the connection is closed before the handshake) |
 | Time one response may take to deliver | 2 h | the stream ends, truncated |
 
 8192 is the number of positions the KV caches are allocated for
@@ -183,7 +183,7 @@ SwiftMoE/
     SwiftMoEServer/   Executable: OpenAI-compatible HTTP server
     SwiftMoEChat/     Executable: Interactive TUI chat client
   Tests/
-    SwiftMoETests/    254 tests across 40 suites
+    SwiftMoETests/    255 tests across 40 suites
   metal_infer/        Original Obj-C/Metal reference implementation
 ```
 
