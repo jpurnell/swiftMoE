@@ -172,10 +172,17 @@ The `SwiftMoE` library target itself still imports none of them. A consumer of t
 | A slow client sending head then body | One 10 s budget for both | Up to 10 s for the head plus 10 s for the body |
 | `Date`/`Server` headers, header order | None / fixed | Whatever the kit emits |
 | Malformed target (`//`, dot segments, bad `%`) | 404 | 400 `malformed_target`, OpenAI-shaped via the refusal hook |
-| HTTP/1.0 | Answered `HTTP/1.0` | Answered `HTTP/1.1` |
+| HTTP/1.0 | Answered `HTTP/1.1` (recorded: the old server never answered 1.0) | Same; no change |
 | `Cache-Control` on the stream | `no-cache` | `no-store` |
 | `stream: false` | Ignored: always SSE | Unchanged (a separate feature, not part of this move) |
 | Connection beyond the cap | `503` + `Retry-After: queueDeadline` | The kit's refusal; `Retry-After` **verify** and set to match |
+
+**Found by the recording (2026-10-30), to be preserved unless the owner decides otherwise:**
+- The old stream has no `Content-Length` and ends by closing the connection; the kit's event stream is chunked, so `Transfer-Encoding: chunked` appears. Allowed header change; the body bytes must match.
+- `Authorization` accepts a lowercase scheme (`bearer <key>`) and a key with a trailing space (200). Keep: the auth middleware moves unchanged.
+- `max_tokens: null` is treated as absent; `64.0` and `1e1` are accepted as whole numbers. Keep (the parse moves unchanged).
+- The busy refusal carries `Retry-After` equal to the queue deadline and no `Date`. The preflight sends `Access-Control-Allow-Methods: POST` and `Access-Control-Allow-Headers: Authorization, Content-Type` (K2's defaults match).
+- A query string on the route (`?stream=true`) is ignored and the request is served. Keep.
 
 ## 8. Test strategy (TDD; every assertion able to fail for the reason its test is named for)
 
