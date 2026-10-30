@@ -23,14 +23,20 @@ final class InferenceSlot: Sendable {
     }
 
     /// Hands the slot to the longest-waiting request, if any. Later calls do nothing.
-    func release() {
+    ///
+    /// - Parameter then: Called once the gate has taken the slot back (and only by the call that
+    ///   released it), so a caller that reports the release reports something that has happened.
+    func release(then: @escaping @Sendable () -> Void = {}) {
         let first = released.withLock { state -> Bool in
             defer { state = true }
             return !state
         }
         guard first else { return }
         let gate = self.gate
-        Task { await gate.release() }
+        Task {
+            await gate.release()
+            then()
+        }
     }
 }
 

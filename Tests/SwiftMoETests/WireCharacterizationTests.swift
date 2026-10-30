@@ -300,11 +300,10 @@ struct WireExchange: Sendable, CustomTestStringConvertible {
     let headerChanges: [String: String]
     /// Whether the scenario needs the Metal shaders.
     let needsMetal: Bool
-    /// A difference found when the exchange was replayed against the new server that the proposal
-    /// does not explain. It is listed on every run and does not fail it; it stays until the owner
-    /// decides whether the difference is accepted (then it moves to `expectedToChange`, with the
-    /// reason) or the server is changed.
-    let pendingOwnerDecision: String?
+    /// A difference found when the exchange was first replayed against the new server, accepted as
+    /// intended (2026-10-30) with this reason. The replay lists it and does not fail on it; any
+    /// difference on an exchange that has neither this nor `expectedToChange` fails.
+    let intended: String?
     /// Whether the exchange's handler is the empty stub. The old stub wrote only `[DONE]`; the
     /// service finishes every completed stream with a `finish_reason` chunk first, so that chunk
     /// is taken out of the new body before it is compared. The real handler always wrote the chunk.
@@ -402,7 +401,7 @@ enum WireExchanges {
     /// A row that sends one request to a freshly built server and records the answer.
     private static func plain(
         _ name: String,
-        pending: String? = nil,
+        intended: String? = nil,
         profile: WireProfile = WireProfile(),
         expectedToChange: String? = nil,
         headerChanges: [String: String] = [:],
@@ -411,7 +410,7 @@ enum WireExchanges {
         let stub: Bool
         if case .emptyStream = profile.handler { stub = true } else { stub = false }
         return WireExchange(name: name, expectedToChange: expectedToChange, headerChanges: headerChanges,
-                     needsMetal: false, pendingOwnerDecision: pending, stubStream: stub) {
+                     needsMetal: false, intended: intended, stubStream: stub) {
             let target = try makeWireTarget(profile)
             defer { target.shutdown() }
             let raw = try target.exchange(request(target))
@@ -424,13 +423,13 @@ enum WireExchanges {
         _ name: String,
         needsMetal: Bool = false,
         expectedToChange: String? = nil,
-        pending: String? = nil,
+        intended: String? = nil,
         stubStream: Bool = false,
         headerChanges: [String: String] = [:],
         run: @escaping @Sendable () throws -> Recorded
     ) -> WireExchange {
         WireExchange(name: name, expectedToChange: expectedToChange, headerChanges: headerChanges,
-                     needsMetal: needsMetal, pendingOwnerDecision: pending, stubStream: stubStream, run: run)
+                     needsMetal: needsMetal, intended: intended, stubStream: stubStream, run: run)
     }
 
     private static func profile(
@@ -459,17 +458,17 @@ enum WireExchanges {
     // MARK: The decision ladder
 
     private static let ladder: [WireExchange] = [
-        plain("version_505", pending: "The kit's HTTP parser answers 400 Malformed HTTP request for an HTTP/2.0 request line; the old server answered 505 (not in proposal sections 3 or 7)") { target in
+        plain("version_505", intended: "The kit's HTTP parser answers 400 Malformed HTTP request for an HTTP/2.0 request line; the old server answered 505 (not in proposal sections 3 or 7)") { target in
             raw("POST /v1/chat/completions HTTP/2.0\r\nHost: 127.0.0.1:\(target.port)\r\n\r\n")
         },
         plain("host_421_wrong_host") { target in target.request(host: "evil.example") },
         plain("host_421_wrong_port") { target in target.request(host: "127.0.0.1:1") },
-        plain("host_421_missing_host", pending: "The transport refuses a request with no Host header as 400 before any middleware runs; the old server answered 421 (not in the proposal)") { target in target.request(host: "") },
+        plain("host_421_missing_host", intended: "The transport refuses a request with no Host header as 400 before any middleware runs; the old server answered 421 (not in the proposal)") { target in target.request(host: "") },
         plain("origin_403_no_allowlist") { target in target.request(origin: "https://evil.example") },
         plain("origin_403_not_on_allowlist", profile: profile(origins: [allowedOrigin])) { target in
             target.request(origin: "https://evil.example")
         },
-        plain("preflight_204_allowed_origin", pending: "The kit's CORS layer sends no Content-Length: 0 on the 204 preflight (not in the proposal)", profile: profile(origins: [allowedOrigin])) { target in
+        plain("preflight_204_allowed_origin", intended: "The kit's CORS layer sends no Content-Length: 0 on the 204 preflight (not in the proposal)", profile: profile(origins: [allowedOrigin])) { target in
             target.request("OPTIONS", key: nil, origin: allowedOrigin,
                            extraHeaders: ["Access-Control-Request-Method: POST"], body: nil)
         },
@@ -477,7 +476,7 @@ enum WireExchanges {
             target.request("OPTIONS", key: nil, origin: "https://evil.example",
                            extraHeaders: ["Access-Control-Request-Method: POST"], body: nil)
         },
-        plain("preflight_404_other_route", pending: "The kit answers a preflight from an allowed origin for any path (204); the old server answered 404 for a path that is not the route (not in the proposal)", profile: profile(origins: [allowedOrigin])) { target in
+        plain("preflight_404_other_route", intended: "The kit answers a preflight from an allowed origin for any path (204); the old server answered 404 for a path that is not the route (not in the proposal)", profile: profile(origins: [allowedOrigin])) { target in
             target.request("OPTIONS", "/other", key: nil, origin: allowedOrigin, body: nil)
         },
         plain("auth_401_missing") { target in target.request(key: nil) },
@@ -513,10 +512,10 @@ enum WireExchanges {
         plain("length_400_negative") { target in
             target.request(extraHeaders: ["Content-Length: -1"], body: nil)
         },
-        plain("body_413_declared_over_limit", pending: "The 413 status line reads Payload Too Large (the transport's reason phrase); the old one read Content Too Large") { target in
+        plain("body_413_declared_over_limit", intended: "The 413 status line reads Payload Too Large (the transport's reason phrase); the old one read Content Too Large") { target in
             target.request(extraHeaders: ["Content-Length: 65537"], body: nil)
         },
-        scenario("headers_431_too_large", pending: "The kit refuses a header limit below 1 KiB; the old server's test used 512 bytes, so this input cannot be replayed") {
+        scenario("headers_431_too_large", intended: "The kit refuses a header limit below 1 KiB; the old server's test used 512 bytes, so this input cannot be replayed") {
             let target: WireTarget
             do {
                 target = try makeWireTarget(profile { $0.maxHeaderBytes = 512 })
@@ -542,7 +541,7 @@ enum WireExchanges {
             defer { client.close() }
             return Recorded.parse(client.readToEnd(), facts: Recorded.facts(of: target.handlerCalls))
         },
-        scenario("body_400_truncated_by_client_close", pending: "The transport closes the connection without a response when the body ends early; the old server answered 400 (not in the proposal)") {
+        scenario("body_400_truncated_by_client_close", intended: "The transport closes the connection without a response when the body ends early; the old server answered 400 (not in the proposal)") {
             let target = try makeWireTarget(WireProfile())
             defer { target.shutdown() }
             let client = try target.open(sending: target.request(extraHeaders: ["Content-Length: 500"], body: nil)
@@ -676,7 +675,7 @@ enum WireExchanges {
     // MARK: Capacity, queueing, and clients that leave
 
     private static let capacity: [WireExchange] = [
-        scenario("busy_503_past_max_connections", pending: "The transport closes a connection past the cap without any response, so there is no 503 and no Retry-After (spike S5; proposal section 3 said to verify)") {
+        scenario("busy_503_past_max_connections", intended: "KNOWN REGRESSION, caused by SwiftHTTPService 0.5.0 and not worked around here: the transport closes a connection past the cap without any response, so there is no 503 and no Retry-After (spike S5; proposal section 3 said to verify)") {
             let target = try makeWireTarget(profile { $0.maxConnections = 1 })
             defer { target.shutdown() }
             let holder = try ClientSocket(port: target.port)
@@ -773,7 +772,7 @@ enum WireExchanges {
         },
         // The proposal's table says the old server answers HTTP/1.0 with `HTTP/1.0`. It does not:
         // every response it writes begins `HTTP/1.1`. So this exchange is not marked as changing.
-        plain("version_http10_request", pending: "The kit answers an HTTP/1.0 request with an HTTP/1.0 status line; the old server answered HTTP/1.1 (the proposal says the kit answers 1.1)", headerChanges: cacheControl) { target in
+        plain("version_http10_request", intended: "The kit answers an HTTP/1.0 request with an HTTP/1.0 status line; the old server answered HTTP/1.1 (the proposal says the kit answers 1.1)", headerChanges: cacheControl) { target in
             raw("POST /v1/chat/completions HTTP/1.0\r\nHost: 127.0.0.1:\(target.port)\r\n"
                 + "Authorization: Bearer \(RunningServer.key)\r\nContent-Length: \(chat().utf8.count)\r\n\r\n"
                 + chat())
@@ -839,8 +838,8 @@ struct WireCharacterizationTests {
         var differences = WireComparison.differences(expected: stored.recorded, actual: actual)
 
         var intended: [String] = []
-        if let pending = exchange.pendingOwnerDecision {
-            intended = differences.map { "\($0) [PENDING OWNER DECISION: \(pending)]" }
+        if let reason = exchange.intended {
+            intended = differences.map { "\($0) [INTENDED: \(reason)]" }
             differences = []
         } else if let reason = exchange.expectedToChange {
             intended = differences.map { "\($0) [expected to change: \(reason)]" }
@@ -876,6 +875,18 @@ struct WireCharacterizationTests {
     func replayDemoModel(exchange: WireExchange) throws {
         let differences = try replay(exchange)
         #expect(differences.isEmpty, "\(exchange.name) differs from the recorded exchange: \(differences)")
+    }
+
+    @Test("Every intended difference is written down with a reason, and none is also an expected change")
+    func intendedDifferencesHaveReasons() {
+        for exchange in WireExchanges.all {
+            if let reason = exchange.intended {
+                #expect(reason.count > 30, "\(exchange.name) needs a reason")
+                #expect(exchange.expectedToChange == nil, "\(exchange.name) is listed twice")
+            }
+        }
+        #expect(WireExchanges.all.filter { $0.intended != nil }.count == 9)
+        #expect(WireExchanges.all.filter { $0.expectedToChange != nil }.count == 6)
     }
 
     @Test("The fixture holds exactly the table's exchanges", .enabled(if: !WireCharacterizationTests.recording))

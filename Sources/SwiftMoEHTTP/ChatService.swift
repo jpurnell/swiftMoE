@@ -395,7 +395,7 @@ public final class ChatService: Sendable {
 
     // MARK: - The request
 
-    private func handle(_ request: Request) async throws -> Response {
+    func handle(_ request: Request) async throws -> Response {
         guard request.headers[.contentLength] != nil || request.headers[.transferEncoding] != nil else {
             return OpenAIError.lengthRequired.response
         }
@@ -434,8 +434,7 @@ public final class ChatService: Sendable {
             try await Self.stream(completion, generate: generate, to: events)
         }
         response.stream = response.stream?.observing { _, _ in
-            slot.release()
-            observer?(.slotReleased)
+            slot.release { observer?(.slotReleased) }
         }
         return response
     }
