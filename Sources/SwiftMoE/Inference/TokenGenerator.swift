@@ -54,7 +54,7 @@ public final class TokenGenerator {
     /// This is `GPU_KV_SEQ` in `infer.m` — the GPU KV buffers are pre-allocated for this many
     /// positions, and ``KVCache`` throws rather than grow past its allocation. It is therefore
     /// the longest sequence, prompt and completion together, that can be generated;
-    /// ``HTTPServer/Limits/maxCompletionTokens`` defaults to it.
+    /// the HTTP service's `maxCompletionTokens` limit defaults to it.
     public static let defaultMaxSequenceLength = 8192
 
     /// Creates a token generator with the given Metal context.

@@ -3,6 +3,7 @@ import Foundation
 import os
 #endif
 import SwiftMoE
+import SwiftMoEHTTP
 import CLineNoise
 
 // ============================================================================

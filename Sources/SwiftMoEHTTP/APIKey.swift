@@ -1,16 +1,17 @@
 import CryptoKit
 import Foundation
+import SwiftMoE
 #if canImport(os)
 import os
 #endif
 
 private let logger = Logger(subsystem: "com.swiftmoe", category: "server.credential")
 
-/// Why an ``HTTPServer`` refused its configuration.
+/// Why a ``ChatService`` refused its configuration.
 ///
 /// Each case is something an operator has to fix before the server will listen; none is
 /// produced by a request.
-public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
+public enum ServiceError: Error, Equatable, Sendable, LocalizedError {
     /// The key is shorter than ``APIKey/minimumLength`` characters.
     case keyTooShort(minimum: Int)
     /// The key contains a space, a control character, or anything outside printable ASCII.
@@ -23,19 +24,25 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
     case keyFileTooLarge(path: String, limit: Int)
     /// No key was supplied, and nothing excused the listener on `host` from needing one.
     case credentialRequired(host: String)
-    /// The listener on `host` can be reached from other machines, and nobody has said that
-    /// something else encrypts the traffic.
-    case plaintextNotAcknowledged(host: String)
     /// `--no-auth` was given together with a key.
     case conflictingAuthentication
     /// An allowed origin is not of the form `scheme://host[:port]`.
     case invalidOrigin(String)
-    /// A limit in ``HTTPServer/Limits`` is zero or negative.
+    /// A limit in ``InferenceLimits`` is zero or negative.
     case invalidLimit(name: String)
-    /// One limit in ``HTTPServer/Limits`` is larger than another that bounds it.
+    /// One limit in ``InferenceLimits`` is larger than another that bounds it.
     case limitAboveLimit(name: String, ceiling: String)
     /// A command-line option that takes a value was given without one.
     case missingValue(option: String)
+    /// A transport setting was refused; names the field, never its value.
+    case invalidConfiguration(field: String)
+    /// The listener on `host` would serve plain text to other machines; give it a TLS identity
+    /// (`--tls-cert` and `--tls-key`) or bind loopback.
+    case exposedPlaintext(host: String)
+    /// The TLS certificate or key is unfit to serve; the text names the file and the fault, never the key.
+    case tlsIdentity(String)
+    /// The listening socket could not be opened on `host`.
+    case bindFailed(host: String)
 
     /// A sentence an operator can act on.
     public var errorDescription: String? {
@@ -52,16 +59,10 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
             return "The API key file \(path) is larger than \(limit) bytes."
         case .credentialRequired(let host):
             let remedy = "No API key is configured for the listener on \(host). Set \(APIKey.environmentVariable) or pass --api-key-file <path>."
-            if HTTPServer.isLoopback(host) {
+            if ChatService.isLoopback(host) {
                 return remedy + " On loopback, --no-auth starts it without one."
             }
             return remedy + " A listener that is not on loopback cannot run without one."
-        case .plaintextNotAcknowledged(let host):
-            return "Refusing to listen on \(host) in plain text: other machines can reach it, and the "
-                + "API key and every prompt would cross the network unencrypted. This server does not speak TLS. "
-                + "Bind loopback (--host 127.0.0.1) and put a TLS-terminating proxy on this machine in front of it; "
-                + "or, if a TLS-terminating proxy on the same trust boundary already fronts this port, "
-                + "pass --allow-plaintext."
         case .conflictingAuthentication:
             return "--no-auth was given together with an API key. Remove one of them."
         case .invalidOrigin(let origin):
@@ -72,6 +73,16 @@ public enum HTTPServerError: Error, Equatable, Sendable, LocalizedError {
             return "The limit \(name) must not be greater than \(ceiling)."
         case .missingValue(let option):
             return "\(option) requires a value."
+        case .invalidConfiguration(let field):
+            return "The setting \(field) is not one the server can serve."
+        case .exposedPlaintext(let host):
+            return "Refusing to listen on \(host) in plain text: other machines can reach it, and the "
+                + "API key and every prompt would cross the network unencrypted. Give the server a "
+                + "certificate and key (--tls-cert and --tls-key), or bind loopback (--host 127.0.0.1)."
+        case .tlsIdentity(let detail):
+            return "The TLS certificate or key cannot be used: \(detail)"
+        case .bindFailed(let host):
+            return "The listening socket on \(host) could not be opened: the address is in use or not available."
         }
     }
 }
@@ -107,16 +118,16 @@ public struct APIKey: Sendable, CustomStringConvertible, CustomDebugStringConver
     /// Wraps key text, after trimming surrounding whitespace.
     ///
     /// - Parameter text: The key, as read from a variable or a file.
-    /// - Throws: ``HTTPServerError/keyTooShort(minimum:)`` under ``minimumLength`` characters;
-    ///   ``HTTPServerError/keyNotPrintable`` when the key holds anything but printable ASCII —
+    /// - Throws: ``ServiceError/keyTooShort(minimum:)`` under ``minimumLength`` characters;
+    ///   ``ServiceError/keyNotPrintable`` when the key holds anything but printable ASCII —
     ///   a space or a line break inside a key cannot be carried in a header.
     public init(_ text: String) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.utf8.count >= Self.minimumLength else {
-            throw HTTPServerError.keyTooShort(minimum: Self.minimumLength)
+            throw ServiceError.keyTooShort(minimum: Self.minimumLength)
         }
         guard trimmed.utf8.allSatisfy({ $0 > 0x20 && $0 < 0x7F }) else {
-            throw HTTPServerError.keyNotPrintable
+            throw ServiceError.keyNotPrintable
         }
         self.text = trimmed
     }
@@ -127,9 +138,9 @@ public struct APIKey: Sendable, CustomStringConvertible, CustomDebugStringConver
     /// from, so the file checked and the file read are the same file.
     ///
     /// - Parameter url: Location of the key file.
-    /// - Throws: ``HTTPServerError/keyFileUnreadable(path:)``,
-    ///   ``HTTPServerError/keyFilePermissions(path:mode:)`` when group or other hold any
-    ///   permission bit, ``HTTPServerError/keyFileTooLarge(path:limit:)``, or the errors of
+    /// - Throws: ``ServiceError/keyFileUnreadable(path:)``,
+    ///   ``ServiceError/keyFilePermissions(path:mode:)`` when group or other hold any
+    ///   permission bit, ``ServiceError/keyFileTooLarge(path:limit:)``, or the errors of
     ///   ``init(_:)``.
     public init(contentsOf url: URL) throws {
         let path = url.path
@@ -137,7 +148,7 @@ public struct APIKey: Sendable, CustomStringConvertible, CustomDebugStringConver
         do {
             handle = try FileHandle(forReadingFrom: url)
         } catch {
-            throw HTTPServerError.keyFileUnreadable(path: path)
+            throw ServiceError.keyFileUnreadable(path: path)
         }
         defer {
             do {
@@ -151,21 +162,21 @@ public struct APIKey: Sendable, CustomStringConvertible, CustomDebugStringConver
         var status = stat()
         guard fstat(handle.fileDescriptor, &status) == 0,
               status.st_mode & S_IFMT == S_IFREG else {
-            throw HTTPServerError.keyFileUnreadable(path: path)
+            throw ServiceError.keyFileUnreadable(path: path)
         }
         let mode = Int(status.st_mode & 0o777)
         guard mode & 0o077 == 0 else {
-            throw HTTPServerError.keyFilePermissions(path: path, mode: mode)
+            throw ServiceError.keyFilePermissions(path: path, mode: mode)
         }
 
         let contents: Data
         do {
             contents = try handle.read(upToCount: Self.maximumFileBytes + 1) ?? Data()
         } catch {
-            throw HTTPServerError.keyFileUnreadable(path: path)
+            throw ServiceError.keyFileUnreadable(path: path)
         }
         guard contents.count <= Self.maximumFileBytes else {
-            throw HTTPServerError.keyFileTooLarge(path: path, limit: Self.maximumFileBytes)
+            throw ServiceError.keyFileTooLarge(path: path, limit: Self.maximumFileBytes)
         }
         try self.init(String(decoding: contents, as: UTF8.self))
     }
@@ -250,54 +261,51 @@ public struct BearerCredential: Sendable, CustomStringConvertible {
     public var description: String { "BearerCredential(<sha256 digest>)" }
 }
 
-extension HTTPServer {
+/// How a listener decides who may run inference.
+///
+/// There is no default: every ``ChatService`` is created with one of these written down.
+public enum Authentication: Sendable {
+    /// Every request must carry `Authorization: Bearer <key>`.
+    case bearer(BearerCredential)
 
-    /// How a listener decides who may run inference.
+    /// No credential is checked. Accepted on a loopback bind only:
+    /// ``ChatService/start()`` throws ``ServiceError/credentialRequired(host:)``
+    /// for any other address.
+    case unauthenticatedLoopback
+
+    /// Turns what an operator supplied into a decision.
     ///
-    /// There is no default: every ``HTTPServer`` is created with one of these written down.
-    public enum Authentication: Sendable {
-        /// Every request must carry `Authorization: Bearer <key>`.
-        case bearer(BearerCredential)
-
-        /// No credential is checked. Accepted on a loopback bind only:
-        /// ``HTTPServer/openListener()`` throws ``HTTPServerError/credentialRequired(host:)``
-        /// for any other address.
-        case unauthenticatedLoopback
-
-        /// Turns what an operator supplied into a decision.
-        ///
-        /// | key | `noAuth` | host | result |
-        /// |---|---|---|---|
-        /// | present | no | any | ``bearer(_:)`` |
-        /// | present | yes | any | ``HTTPServerError/conflictingAuthentication`` |
-        /// | absent | yes | loopback | ``unauthenticatedLoopback`` |
-        /// | absent | yes | other | ``HTTPServerError/credentialRequired(host:)`` |
-        /// | absent | no | any | ``HTTPServerError/credentialRequired(host:)`` |
-        ///
-        /// - Parameters:
-        ///   - host: The address the listener will bind.
-        ///   - keyFile: Path given as `--api-key-file`, or `nil`.
-        ///   - environment: The process environment.
-        ///   - noAuth: Whether `--no-auth` was given.
-        /// - Returns: The authentication the listener will enforce.
-        /// - Throws: ``HTTPServerError`` as tabulated, and the key-loading errors of
-        ///   ``APIKey/load(keyFile:environment:)``.
-        public static func resolve(
-            host: String,
-            keyFile: String?,
-            environment: [String: String],
-            noAuth: Bool
-        ) throws -> Authentication {
-            let key = try APIKey.load(keyFile: keyFile, environment: environment)
-            if let key {
-                guard !noAuth else { throw HTTPServerError.conflictingAuthentication }
-                return .bearer(BearerCredential(key: key))
-            }
-            guard noAuth, HTTPServer.isLoopback(host) else {
-                throw HTTPServerError.credentialRequired(host: host)
-            }
-            // SECURITY: the operator passed --no-auth and the bind address is loopback, both checked above
-            return .unauthenticatedLoopback
+    /// | key | `noAuth` | host | result |
+    /// |---|---|---|---|
+    /// | present | no | any | ``bearer(_:)`` |
+    /// | present | yes | any | ``ServiceError/conflictingAuthentication`` |
+    /// | absent | yes | loopback | ``unauthenticatedLoopback`` |
+    /// | absent | yes | other | ``ServiceError/credentialRequired(host:)`` |
+    /// | absent | no | any | ``ServiceError/credentialRequired(host:)`` |
+    ///
+    /// - Parameters:
+    ///   - host: The address the listener will bind.
+    ///   - keyFile: Path given as `--api-key-file`, or `nil`.
+    ///   - environment: The process environment.
+    ///   - noAuth: Whether `--no-auth` was given.
+    /// - Returns: The authentication the listener will enforce.
+    /// - Throws: ``ServiceError`` as tabulated, and the key-loading errors of
+    ///   ``APIKey/load(keyFile:environment:)``.
+    public static func resolve(
+        host: String,
+        keyFile: String?,
+        environment: [String: String],
+        noAuth: Bool
+    ) throws -> Authentication {
+        let key = try APIKey.load(keyFile: keyFile, environment: environment)
+        if let key {
+            guard !noAuth else { throw ServiceError.conflictingAuthentication }
+            return .bearer(BearerCredential(key: key))
         }
+        guard noAuth, ChatService.isLoopback(host) else {
+            throw ServiceError.credentialRequired(host: host)
+        }
+        // SECURITY: the operator passed --no-auth and the bind address is loopback, both checked above
+        return .unauthenticatedLoopback
     }
 }

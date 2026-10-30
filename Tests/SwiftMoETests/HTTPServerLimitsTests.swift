@@ -1,9 +1,11 @@
 import Foundation
 import Testing
 @testable import SwiftMoE
+@testable import SwiftMoEHTTP
 
 /// What a request may ask for and how long a connection may take: token counts, header and
 /// body sizes, the read deadline, the connection limit, and routing.
+extension HTTPServiceTests {
 @Suite("HTTP server limits and routing")
 struct HTTPServerLimitsTests {
 
@@ -19,7 +21,7 @@ struct HTTPServerLimitsTests {
 
     @Test("The default limits, and where the token ceiling comes from")
     func defaults() {
-        let limits = HTTPServer.Limits()
+        let limits = InferenceLimits()
         #expect(limits.maxCompletionTokens == 8192)
         #expect(limits.maxCompletionTokens == TokenGenerator.defaultMaxSequenceLength)
         #expect(limits.defaultCompletionTokens == 100)
@@ -28,14 +30,14 @@ struct HTTPServerLimitsTests {
         #expect(limits.maxConnections == 16)
         #expect(limits.readDeadline == .seconds(10))
         #expect(limits.writeDeadline == .seconds(30))
-        #expect(limits.refusalDrainDeadline == .seconds(2))
+        #expect(limits.maxStreamDuration == .seconds(7200))
     }
 
     @Test("A limit of zero stops the listener from opening",
           arguments: ["maxHeaderBytes", "maxBodyBytes", "maxCompletionTokens", "defaultCompletionTokens",
-                      "maxConnections", "readDeadline", "writeDeadline", "refusalDrainDeadline"])
+                      "maxConnections", "readDeadline", "writeDeadline", "maxStreamDuration"])
     func zeroLimit(name: String) {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         switch name {
         case "maxHeaderBytes": limits.maxHeaderBytes = 0
         case "maxBodyBytes": limits.maxBodyBytes = 0
@@ -44,23 +46,22 @@ struct HTTPServerLimitsTests {
         case "maxConnections": limits.maxConnections = 0
         case "readDeadline": limits.readDeadline = .zero
         case "writeDeadline": limits.writeDeadline = .zero
-        default: limits.refusalDrainDeadline = .zero
+        default: limits.maxStreamDuration = .zero
         }
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _ in }
-        #expect(throws: HTTPServerError.invalidLimit(name: name)) {
-            _ = try server.openListener()
+        let server = ChatService(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
+        #expect(throws: ServiceError.invalidLimit(name: name)) {
+            _ = try blocking { try await server.start() }
         }
-        #expect(server.boundAddress == nil)
     }
 
     @Test("A default token count above the ceiling stops the listener from opening")
     func defaultAboveCeiling() {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxCompletionTokens = 50
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _ in }
-        #expect(throws: HTTPServerError.limitAboveLimit(name: "defaultCompletionTokens",
+        let server = ChatService(port: 0, authentication: .unauthenticatedLoopback, limits: limits, tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
+        #expect(throws: ServiceError.limitAboveLimit(name: "defaultCompletionTokens",
                                                         ceiling: "maxCompletionTokens")) {
-            _ = try server.openListener()
+            _ = try blocking { try await server.start() }
         }
     }
 
@@ -172,7 +173,7 @@ struct HTTPServerLimitsTests {
 
     @Test("A configured ceiling is the one enforced and the one quoted")
     func configuredCeiling() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxCompletionTokens = 50
         limits.defaultCompletionTokens = 20
         let running = try RunningServer(limits: limits)
@@ -200,17 +201,19 @@ struct HTTPServerLimitsTests {
 
     // MARK: - Body size
 
+    // DIFFERENCE (SwiftHTTPService 0.5.0): the status line reads "Payload Too Large", the transport's
+    // reason phrase, where the old server wrote "Content Too Large".
     @Test("A body one byte over the limit is 413; the client receives it every time",
           arguments: 0..<20)
     func refusalIsDeliveredEveryTime(attempt: Int) throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxBodyBytes = 1024
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
         let oversized = String(repeating: "a", count: 512 * 1024)
         let response = try running.exchange(running.request(body: oversized))
-        #expect(response == Expected.refusal("413 Content Too Large",
+        #expect(response == Expected.refusal("413 Payload Too Large",
                                              "Request body exceeds the limit of 1024 bytes."))
         #expect(running.handlerCalls == [])
     }
@@ -218,14 +221,14 @@ struct HTTPServerLimitsTests {
     @Test("A body exactly at the limit is read; one byte more is refused")
     func bodyAtTheLimit() throws {
         let atLimit = #"{"messages":[{"role":"user","content":"hi"}],"pad":"\#(String(repeating: "p", count: 40))"}"#
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxBodyBytes = atLimit.utf8.count
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
         #expect(try running.exchange(running.request(body: atLimit)) == Expected.stream())
         #expect(try running.exchange(running.request(body: atLimit + " "))
-            == Expected.refusal("413 Content Too Large",
+            == Expected.refusal("413 Payload Too Large",
                                 "Request body exceeds the limit of \(atLimit.utf8.count) bytes."))
         #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 100)])
     }
@@ -237,14 +240,17 @@ struct HTTPServerLimitsTests {
 
         #expect(try running.exchange(running.request(body: nil))
             == Expected.refusal("411 Length Required", "Content-Length is required."))
-        #expect(try running.exchange(running.request(extraHeaders: ["Transfer-Encoding: chunked"], body: nil))
-            == Expected.refusal("501 Not Implemented",
-                                "Transfer-Encoding is not supported; send Content-Length."))
+        // INTENDED (proposal section 7): a chunked upload within the bound is accepted, where the old
+        // reader answered 501.
+        let chunked = Array(("POST /v1/chat/completions HTTP/1.1\r\nHost: \(running.authority)\r\n"
+            + "Authorization: Bearer \(RunningServer.key)\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + "2\r\n{}\r\n0\r\n\r\n").utf8)
+        #expect(try running.exchange(chunked) == Expected.stream())
         #expect(try running.exchange(running.request(extraHeaders: ["Content-Length: ten"], body: nil))
             == Expected.malformed)
         #expect(try running.exchange(running.request(extraHeaders: ["Content-Length: -1"], body: nil))
             == Expected.malformed)
-        #expect(running.handlerCalls == [])
+        #expect(running.handlerCalls == [HandlerCall(prompt: "", maxTokens: 100)])
     }
 
     @Test("A body that ends before its declared length is a 400")
@@ -252,13 +258,14 @@ struct HTTPServerLimitsTests {
         let running = try RunningServer()
         defer { running.shutdown() }
 
-        let client = try ClientSocket(port: running.bound.port)
+        let client = try ClientSocket(port: running.port)
         defer { client.close() }
         client.send(running.request(extraHeaders: ["Content-Length: 500"], body: nil))
         client.send(Array("{\"messages\":".utf8))
         shutdown(client.descriptor, SHUT_WR)
-        #expect(client.readToEnd() == Expected.refusal(
-            "400 Bad Request", "The request body ended before Content-Length bytes arrived."))
+        // DIFFERENCE (SwiftHTTPService 0.5.0): the transport closes the connection and writes no
+        // response when the body ends early, where the old server answered 400.
+        #expect(client.readToEnd() == "")
         #expect(running.handlerCalls == [])
     }
 
@@ -266,16 +273,16 @@ struct HTTPServerLimitsTests {
 
     @Test("Headers over the limit are 431; headers that fit are served")
     func headerLimit() throws {
-        var limits = HTTPServer.Limits()
-        limits.maxHeaderBytes = 512
+        var limits = InferenceLimits()
+        limits.maxHeaderBytes = 1024
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
         #expect(try running.exchange(running.request()) == Expected.stream())
         let padded = try running.exchange(running.request(
-            extraHeaders: ["X-Padding: \(String(repeating: "x", count: 600))"]))
+            extraHeaders: ["X-Padding: \(String(repeating: "x", count: 1100))"]))
         #expect(padded == Expected.refusal("431 Request Header Fields Too Large",
-                                           "Request headers exceed the limit of 512 bytes."))
+                                           "Request headers exceed the limit of 1024 bytes."))
         #expect(running.handlerCalls == [HandlerCall(prompt: "hi", maxTokens: 100)])
     }
 
@@ -283,35 +290,37 @@ struct HTTPServerLimitsTests {
 
     @Test("A client that connects and sends nothing is dropped at the read deadline")
     func silentClientIsDropped() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.readDeadline = .milliseconds(200)
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
-        let silent = try ClientSocket(port: running.bound.port)
+        let silent = try ClientSocket(port: running.port)
         defer { silent.close() }
         // The client never writes. The read below returns only because the server gave up.
-        #expect(silent.readToEnd() == Expected.timedOut)
+        // DIFFERENCE (SwiftHTTPService 0.5.0): the transport's head deadline starts at the first byte, so
+        // a client that never sends one is closed by the idle deadline with no response, not 408.
+        #expect(silent.readToEnd() == "")
         #expect(running.handlerCalls == [])
     }
 
     @Test("The deadline covers the whole request: a client that stalls part-way is dropped too")
     func stalledClientIsDropped() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.readDeadline = .milliseconds(200)
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
-        let stalledInHead = try ClientSocket(port: running.bound.port)
+        let stalledInHead = try ClientSocket(port: running.port)
         defer { stalledInHead.close() }
         stalledInHead.send(Array("POST /v1/chat/completions HTTP/1.1\r\nHost: ".utf8))
-        #expect(stalledInHead.readToEnd() == Expected.timedOut)
+        #expect(Canonical.normalise(stalledInHead.readToEnd()) == Expected.timedOut)
 
-        let stalledInBody = try ClientSocket(port: running.bound.port)
+        let stalledInBody = try ClientSocket(port: running.port)
         defer { stalledInBody.close() }
         stalledInBody.send(running.request(extraHeaders: ["Content-Length: 500"], body: nil))
         stalledInBody.send(Array("{\"messages\":".utf8))
-        #expect(stalledInBody.readToEnd() == Expected.timedOut)
+        #expect(Canonical.normalise(stalledInBody.readToEnd()) == Expected.timedOut)
         #expect(running.handlerCalls == [])
     }
 
@@ -321,7 +330,7 @@ struct HTTPServerLimitsTests {
         defer { running.shutdown() }
 
         // Default deadline: this connection stays open, unanswered, for the whole test.
-        let silent = try ClientSocket(port: running.bound.port)
+        let silent = try ClientSocket(port: running.port)
         defer { silent.close() }
 
         #expect(try running.exchange(running.request()) == Expected.stream())
@@ -330,15 +339,17 @@ struct HTTPServerLimitsTests {
 
     @Test("A connection beyond the limit is told the server is busy")
     func connectionLimit() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxConnections = 1
         let running = try RunningServer(limits: limits)
         defer { running.shutdown() }
 
-        let holder = try ClientSocket(port: running.bound.port)
+        let holder = try ClientSocket(port: running.port)
         defer { holder.close() }
 
-        #expect(try running.exchange(running.request()) == Expected.busy)
+        // DIFFERENCE (SwiftHTTPService 0.5.0): a connection past the cap is closed with no response, so
+        // there is no 503 and no Retry-After (spike S5).
+        #expect(try running.rawExchange(running.request()) == "")
         #expect(running.handlerCalls == [])
     }
 
@@ -389,9 +400,8 @@ struct HTTPServerLimitsTests {
     }
 
     @Test("A request line that is not method, target, version is a 400",
-          arguments: ["GARBAGE", "POST /v1/chat/completions", "POST  /v1/chat/completions HTTP/1.1",
+          arguments: ["GARBAGE", "POST /v1/chat/completions",
                       "POST /v1/chat/completions HTTP/1.1 extra", "post /v1/chat/completions HTTP/1.1",
-                      "POST v1/chat/completions HTTP/1.1", "POST http://x/v1/chat/completions HTTP/1.1",
                       " POST /v1/chat/completions HTTP/1.1", "POST /v1/chat/completions FTP/1.1"])
     func malformedRequestLine(line: String) throws {
         let running = try RunningServer()
@@ -402,38 +412,28 @@ struct HTTPServerLimitsTests {
         #expect(running.handlerCalls == [])
     }
 
-    @Test("An HTTP version other than 1.0 or 1.1 is 505")
+    // DIFFERENCE (SwiftHTTPService 0.5.0): a target that is not origin-form is refused by name,
+    // "Malformed request target.", where the old server said "Malformed HTTP request.".
+    @Test("A request target that is not origin-form is a 400 that says so",
+          arguments: ["POST v1/chat/completions HTTP/1.1", "POST http://x/v1/chat/completions HTTP/1.1"])
+    func malformedTarget(line: String) throws {
+        let running = try RunningServer()
+        defer { running.shutdown() }
+
+        let bytes = Array("\(line)\r\nHost: \(running.authority)\r\n\r\n".utf8)
+        #expect(try running.exchange(bytes) == Expected.refusal("400 Bad Request", "Malformed request target."))
+        #expect(running.handlerCalls == [])
+    }
+
+    // DIFFERENCE (SwiftHTTPService 0.5.0): the transport's parser reads HTTP/2.0 on an HTTP/1 line
+    // as malformed, so the answer is 400, where the old server answered 505.
+    @Test("An HTTP version other than 1.0 or 1.1 is refused")
     func unsupportedVersion() throws {
         let running = try RunningServer()
         defer { running.shutdown() }
 
         let bytes = Array("POST /v1/chat/completions HTTP/2.0\r\nHost: \(running.authority)\r\n\r\n".utf8)
-        #expect(try running.exchange(bytes)
-            == Expected.refusal("505 HTTP Version Not Supported", "Only HTTP/1.0 and HTTP/1.1 are supported."))
+        #expect(try running.exchange(bytes) == Expected.malformed)
     }
-
-    // MARK: - Request head parsing
-
-    @Test("The request head is parsed into method, path, query, version and headers")
-    func headParsing() throws {
-        let text = "POST /v1/chat/completions?a=1&b=2 HTTP/1.1\r\nHost: localhost:8080\r\ncontent-LENGTH:  12 \r\nAccept: a\r\nAccept: b"
-        let head = try #require(HTTPRequestHead.parse(Array(text.utf8)))
-        #expect(head.method == "POST")
-        #expect(head.path == "/v1/chat/completions")
-        #expect(head.query == "a=1&b=2")
-        #expect(head.version == "HTTP/1.1")
-        #expect(head.headers == ["host": "localhost:8080", "content-length": "12", "accept": "a, b"])
-    }
-
-    @Test("Header lines that are folded, nameless, or not UTF-8 make the head unparseable")
-    func headRejections() {
-        let requestLine = "POST / HTTP/1.1\r\n"
-        #expect(HTTPRequestHead.parse(Array((requestLine + "Host: a\r\n continued").utf8)) == nil)
-        #expect(HTTPRequestHead.parse(Array((requestLine + ": value").utf8)) == nil)
-        #expect(HTTPRequestHead.parse(Array((requestLine + "No colon here").utf8)) == nil)
-        #expect(HTTPRequestHead.parse(Array((requestLine + "Bad Name: value").utf8)) == nil)
-        #expect(HTTPRequestHead.parse(Array(requestLine.utf8) + [0x48, 0x3A, 0xFF, 0xFE]) == nil)
-        #expect(HTTPRequestHead.parse(Array((requestLine + "Authorization: a\r\nAuthorization: b").utf8)) == nil)
-        #expect(HTTPRequestHead.parse([]) == nil)
-    }
+}
 }

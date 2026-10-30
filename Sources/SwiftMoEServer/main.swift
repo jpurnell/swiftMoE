@@ -2,14 +2,17 @@ import Foundation
 #if canImport(os)
 import os
 #endif
+import SwiftHTTPService
 import SwiftMoE
+import SwiftMoEHTTP
 
 // ============================================================================
 // flash-moe-server — OpenAI-compatible HTTP server with SSE streaming
 //
 // Usage:
 //   swift-moe-server --demo [--host 127.0.0.1] [--port 8080] [--api-key-file <path>]
-//                    [--allow-origin <origin>]... [--no-auth] [--allow-plaintext]
+//                    [--allow-origin <origin>]... [--no-auth]
+//                    [--tls-cert <chain.pem> --tls-key <key.pem>]
 //                    [--k 4] [--2bit] [--timing]
 //
 // Authentication:
@@ -22,10 +25,10 @@ import SwiftMoE
 //   address only; on any other address a key is required and --no-auth is refused.
 //
 // Transport:
-//   The server speaks plain HTTP; it does not do TLS. On a loopback address that exposes
-//   nothing. On any other --host it refuses to start unless --allow-plaintext is given, which
-//   states that a TLS-terminating proxy on the same trust boundary fronts this port. The flag
-//   encrypts nothing: between that proxy and this port the key and the prompts are readable.
+//   Plain HTTP on a loopback address exposes nothing. On any other --host the server refuses
+//   to start unless it terminates TLS itself: give it --tls-cert (the PEM chain, leaf first)
+//   and --tls-key (the PEM private key, mode 0600). SIGHUP reloads both without a restart.
+//   The transport speaks HTTP/1.1, one request per connection, and ends a stream after two hours.
 //
 // Browsers:
 //   No CORS headers are sent, and a request carrying an Origin is refused, unless that origin
@@ -35,11 +38,47 @@ import SwiftMoE
 //   POST /v1/chat/completions  (OpenAI chat format, SSE response)
 // ============================================================================
 
+/// The demo model and what it needs to generate, handed to the service's generator thread.
+// Justification: the service runs one generation at a time and never touches these from two threads at once; the generator is not Sendable only because it holds Metal buffers.
+final class DemoModel: @unchecked Sendable {
+    let generator: TokenGenerator
+    let weightFile: WeightFile
+    let expertFDs: [Int32]
+    let layerWeights: [LayerWeightPointers]
+    let use2Bit: Bool
+
+    init(generator: TokenGenerator, weightFile: WeightFile, expertFDs: [Int32],
+         layerWeights: [LayerWeightPointers], use2Bit: Bool) {
+        self.generator = generator
+        self.weightFile = weightFile
+        self.expertFDs = expertFDs
+        self.layerWeights = layerWeights
+        self.use2Bit = use2Bit
+    }
+
+    func generate(_ request: ChatCompletionRequest, shouldContinue: @Sendable () -> Bool,
+                  emit: @Sendable (String) -> Bool) throws {
+        try generator.generate(
+            promptTokens: request.promptTokens,
+            maxTokens: request.maxTokens,
+            weightFile: weightFile,
+            expertFDs: expertFDs,
+            layerWeights: layerWeights,
+            use2Bit: use2Bit,
+            // Asked before every token, prompt tokens included: a client that has left
+            // stops costing GPU time at the next token instead of at the end.
+            shouldContinue: shouldContinue,
+            // In demo mode, map token ID to a character for visible output
+            onToken: { token in emit(String(UnicodeScalar(UInt8(token % 128)))) }
+        )
+    }
+}
+
 private let logger = Logger(subsystem: "com.swiftmoe.server", category: "main")
 
 struct ServerConfig {
     var modelPath: String?
-    var host: String = HTTPServer.loopbackHost
+    var host: String = "127.0.0.1"
     var port: UInt16 = 8080
     var activeExperts: Int = 4
     var use2Bit: Bool = false
@@ -48,7 +87,8 @@ struct ServerConfig {
     var shaderPath: String = "metal_infer/shaders.metal"
     var apiKeyFile: String?
     var noAuth: Bool = false
-    var allowPlaintext: Bool = false
+    var tlsCertificate: String?
+    var tlsKey: String?
     var allowedOrigins: [String] = []
 }
 
@@ -66,18 +106,18 @@ func parseArgs() throws -> ServerConfig {
         case "--timing": config.timing = true
         case "--demo": config.demo = true
         case "--shaders": i += 1; if i < args.count { config.shaderPath = args[i] }
-        case "--api-key-file", "--allow-origin":
+        case "--api-key-file", "--allow-origin", "--tls-cert", "--tls-key":
             // A security option with its value missing is an error, not an option to skip.
             let option = args[i]
             i += 1
-            guard i < args.count else { throw HTTPServerError.missingValue(option: option) }
-            if option == "--api-key-file" {
-                config.apiKeyFile = args[i]
-            } else {
-                config.allowedOrigins.append(args[i])
+            guard i < args.count else { throw ServiceError.missingValue(option: option) }
+            switch option {
+            case "--api-key-file": config.apiKeyFile = args[i]
+            case "--tls-cert": config.tlsCertificate = args[i]
+            case "--tls-key": config.tlsKey = args[i]
+            default: config.allowedOrigins.append(args[i])
             }
         case "--no-auth": config.noAuth = true
-        case "--allow-plaintext": config.allowPlaintext = true
         default: break
         }
         i += 1
@@ -85,20 +125,34 @@ func parseArgs() throws -> ServerConfig {
     return config
 }
 
-func main() throws {
+func main() async throws {
     let serverConfig = try parseArgs()
 
     // Decide who may call the server before anything expensive is built, so a server that
     // may not listen fails in the first millisecond rather than after the model is loaded.
-    let authentication = try HTTPServer.Authentication.resolve(
+    let authentication = try Authentication.resolve(
         host: serverConfig.host,
         keyFile: serverConfig.apiKeyFile,
         environment: ProcessInfo.processInfo.environment,
         noAuth: serverConfig.noAuth
     )
 
-    try HTTPServer.requirePlaintextAcknowledged(host: serverConfig.host,
-                                                allowPlaintext: serverConfig.allowPlaintext)
+    // The same for the bind: a listener that would serve plain text to other machines fails now,
+    // not after the model is loaded. Half a TLS identity is an error, never plain text.
+    var tls: TLSFiles?
+    switch (serverConfig.tlsCertificate, serverConfig.tlsKey) {
+    case (let certificate?, let key?):
+        tls = TLSFiles(certificateChainPath: certificate, privateKeyPath: key)
+    case (nil, nil):
+        break
+    case (.some, nil):
+        throw ServiceError.missingValue(option: "--tls-key")
+    case (nil, .some):
+        throw ServiceError.missingValue(option: "--tls-cert")
+    }
+    if tls == nil, !ChatService.isLocalBind(serverConfig.host) {
+        throw ServiceError.exposedPlaintext(host: serverConfig.host)
+    }
 
     let modelConfig: ModelConfig
     let weightFile: WeightFile
@@ -230,64 +284,44 @@ func main() throws {
     // Placeholder tokenizer for the demo: one token per UTF-8 byte, and one token for an
     // empty prompt, because the generator needs something to start from.
     let vocabSize = modelConfig.vocabSize
-    let tokenizer: HTTPServer.Tokenizer = { prompt in
+    let tokenizer: ChatService.Tokenizer = { prompt in
         let tokens = prompt.utf8.map { Int($0) % vocabSize }
         return tokens.isEmpty ? [0] : tokens
     }
 
-    // The sequence the server admits is the sequence this generator can hold.
-    var limits = HTTPServer.Limits()
+    // The sequence the service admits is the sequence this generator can hold.
+    var limits = InferenceLimits()
     limits.maxSequenceTokens = generator.maxSequenceLength
     limits.maxCompletionTokens = min(limits.maxCompletionTokens, generator.maxSequenceLength)
     limits.defaultCompletionTokens = min(limits.defaultCompletionTokens, limits.maxCompletionTokens)
 
-    let server = HTTPServer(
+    let model = DemoModel(generator: generator, weightFile: weightFile, expertFDs: expertFDs,
+                          layerWeights: layerWeights, use2Bit: serverConfig.use2Bit)
+    let service = ChatService(
         host: serverConfig.host,
         port: serverConfig.port,
         authentication: authentication,
         allowedOrigins: serverConfig.allowedOrigins,
         limits: limits,
-        allowPlaintext: serverConfig.allowPlaintext,
+        tls: tls,
         tokenizer: tokenizer
-    ) { request, writer in
+    ) { request, shouldContinue, emit in
         logger.info("[request] prompt=\(request.prompt.prefix(80), privacy: .private)... promptTokens=\(request.promptTokens.count, privacy: .public) maxTokens=\(request.maxTokens, privacy: .public)")
-
-        writer.sendHeaders()
-
-        do {
-            try generator.generate(
-                promptTokens: request.promptTokens,
-                maxTokens: request.maxTokens,
-                weightFile: weightFile,
-                expertFDs: expertFDs,
-                layerWeights: layerWeights,
-                use2Bit: serverConfig.use2Bit,
-                // Asked before every token, prompt tokens included: a client that has left
-                // stops costing GPU time at the next token instead of at the end.
-                shouldContinue: { !writer.clientHasDisconnected },
-                onToken: { token in
-                    // In demo mode, map token ID to a character for visible output
-                    let ch = String(UnicodeScalar(UInt8(token % 128)))
-                    return writer.sendDelta(token: ch)
-                }
-            )
-        } catch {
-            // The stream ends without a finish reason or [DONE]: a truncated stream is what
-            // tells the client this is not a completed answer.
-            logger.error("[request] generation failed: \(String(describing: error), privacy: .public)")
-            return
-        }
-
-        guard !writer.clientHasDisconnected else {
-            logger.info("[request] client left; generation stopped")
-            return
-        }
-        writer.sendFinish()
-        writer.sendDone()
+        try model.generate(request, shouldContinue: shouldContinue, emit: emit)
         logger.info("[request] done")
     }
 
-    try server.start()
+    // Serve until SIGINT or SIGTERM, then stop gracefully: a stream in flight gets its grace period.
+    let serving = Task { try await service.run() }
+    let signals = [SIGINT, SIGTERM].map { number -> DispatchSourceSignal in
+        signal(number, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+        source.setEventHandler { serving.cancel() }
+        source.resume()
+        return source
+    }
+    defer { signals.forEach { $0.cancel() } }
+    try await serving.value
 
     // Cleanup (unreachable in normal operation)
     if let dir = tempDir {
@@ -306,7 +340,7 @@ func main() throws {
 }
 
 do {
-    try main()
+    try await main()
 } catch {
     logger.error("[server] \(error.localizedDescription, privacy: .public)")
     FileHandle.standardError.write(Data("swift-moe-server: \(error.localizedDescription)\n".utf8))

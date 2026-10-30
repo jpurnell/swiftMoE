@@ -1,11 +1,13 @@
 import Foundation
 import Testing
 @testable import SwiftMoE
+@testable import SwiftMoEHTTP
 
 /// Who may reach the handler: the bearer credential, the origin allowlist, and the `Host` check.
 ///
 /// Every test drives a real server over loopback and compares the whole response, byte for
 /// byte, so a header that should not be there fails the test as surely as one that is missing.
+extension HTTPServiceTests {
 @Suite("HTTP server access control")
 struct HTTPServerAccessTests {
 
@@ -65,9 +67,26 @@ struct HTTPServerAccessTests {
         let running = try RunningServer()
         defer { running.shutdown() }
 
-        let body = String(repeating: "a", count: 512 * 1024)
+        // Within the body bound, a wrong key is 401 and the handler is not called.
+        let body = String(repeating: "a", count: 32 * 1024)
         let response = try running.exchange(running.request(key: RunningServer.wrongKey, body: body))
         #expect(response == Expected.unauthorized)
+        #expect(running.handlerCalls == [])
+    }
+
+    // DIFFERENCE (SwiftHTTPService 0.5.0): the transport checks the declared length against the
+    // route's bound before any middleware runs, so a body over the bound is 413 whatever the key.
+    // Either way the body is refused unread, and the client hears why.
+    @Test("A body declared over the bound is refused 413 before it is read, with or without a key",
+          arguments: 0..<5)
+    func oversizedBodyIsRefusedUnread(attempt: Int) throws {
+        let running = try RunningServer()
+        defer { running.shutdown() }
+
+        let declared = ["Content-Length: \(512 * 1024)"]
+        let refusal = Expected.refusal("413 Payload Too Large", "Request body exceeds the limit of 65536 bytes.")
+        #expect(try running.exchange(running.request(key: RunningServer.wrongKey, extraHeaders: declared, body: nil)) == refusal)
+        #expect(try running.exchange(running.request(extraHeaders: declared, body: nil)) == refusal)
         #expect(running.handlerCalls == [])
     }
 
@@ -84,11 +103,10 @@ struct HTTPServerAccessTests {
     @Test("A listener off loopback refuses to open without a credential, and binds nothing")
     func nonLoopbackNeedsCredential() {
         for host in ["0.0.0.0", "10.0.1.114"] {
-            let server = HTTPServer(host: host, port: 0, authentication: .unauthenticatedLoopback, tokenizer: RunningServer.byteTokenizer) { _, _ in }
-            #expect(throws: HTTPServerError.credentialRequired(host: host)) {
-                _ = try server.openListener()
+            let server = ChatService(host: host, port: 0, authentication: .unauthenticatedLoopback, tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
+            #expect(throws: ServiceError.credentialRequired(host: host)) {
+                _ = try blocking { try await server.start() }
             }
-            #expect(server.boundAddress == nil)
         }
     }
 
@@ -150,19 +168,21 @@ struct HTTPServerAccessTests {
         let allowed = try running.exchange(running.request(
             "OPTIONS", key: nil, origin: Self.webOrigin,
             extraHeaders: ["Access-Control-Request-Method: POST"], body: nil))
-        #expect(allowed == [
-            "HTTP/1.1 204 No Content",
-            "Content-Length: 0",
+        // INTENDED (SwiftHTTPService 0.5.0): the kit's CORS layer writes no `Content-Length: 0` on a 204.
+        let preflightAnswer = Expected.response("204 No Content", headers: [
             "Connection: close",
             "Access-Control-Allow-Methods: POST",
             "Access-Control-Allow-Headers: Authorization, Content-Type",
             "Access-Control-Allow-Origin: http://localhost:3000",
             "Vary: Origin",
-        ].joined(separator: "\r\n") + "\r\n\r\n")
+        ], body: "")
+        #expect(allowed == preflightAnswer)
 
+        // DIFFERENCE (SwiftHTTPService 0.5.0): the kit answers a preflight from an allowed origin
+        // for any path, where the old server answered 404 for a path that is not the route.
         let elsewhere = try running.exchange(running.request(
             "OPTIONS", "/other", key: nil, origin: Self.webOrigin, body: nil))
-        #expect(elsewhere == Expected.refusal("404 Not Found", "No such route.", headers: Self.corsHeaders))
+        #expect(elsewhere == preflightAnswer)
 
         let disallowed = try running.exchange(running.request(
             "OPTIONS", key: nil, origin: "https://evil.example", body: nil))
@@ -187,19 +207,18 @@ struct HTTPServerAccessTests {
           arguments: ["*", "null", "localhost:3000", "http://localhost:3000/", "http://localhost:3000/app",
                       "https://", "https://a b", ""])
     func invalidAllowlistEntry(entry: String) {
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback,
-                                allowedOrigins: [entry], tokenizer: RunningServer.byteTokenizer) { _, _ in }
-        #expect(throws: HTTPServerError.invalidOrigin(entry)) {
-            _ = try server.openListener()
+        let server = ChatService(port: 0, authentication: .unauthenticatedLoopback,
+                                 allowedOrigins: [entry], tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
+        #expect(throws: ServiceError.invalidOrigin(entry)) {
+            _ = try blocking { try await server.start() }
         }
-        #expect(server.boundAddress == nil)
     }
 
     // MARK: - Host
 
     @Test("On loopback, a Host that is not this server is refused before the key is looked at",
           arguments: ["evil.example", "evil.example:8080", "127.0.0.1", "127.0.0.1:1", "localhost",
-                      "localhost.", "10.0.1.114", ""])
+                      "localhost.", "10.0.1.114"])
     func badHost(host: String) throws {
         let running = try RunningServer()
         defer { running.shutdown() }
@@ -209,12 +228,23 @@ struct HTTPServerAccessTests {
         #expect(running.handlerCalls == [])
     }
 
+    // DIFFERENCE (SwiftHTTPService 0.5.0): a request with no Host header is refused by the transport
+    // as malformed (400) before the Host check can say 421.
+    @Test("A request with no Host header is refused, and the handler is not called")
+    func missingHost() throws {
+        let running = try RunningServer()
+        defer { running.shutdown() }
+
+        #expect(try running.exchange(running.request(host: "")) == Expected.malformed)
+        #expect(running.handlerCalls == [])
+    }
+
     @Test("On loopback, the bound address and localhost are accepted as Host, in any letter case")
     func goodHost() throws {
         let running = try RunningServer()
         defer { running.shutdown() }
 
-        let port = running.bound.port
+        let port = running.port
         for host in ["127.0.0.1:\(port)", "localhost:\(port)", "LOCALHOST:\(port)"] {
             #expect(try running.exchange(running.request(host: host)) == Expected.stream())
         }
@@ -230,4 +260,5 @@ struct HTTPServerAccessTests {
         #expect(response == Expected.malformed)
         #expect(running.handlerCalls == [])
     }
+}
 }

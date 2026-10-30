@@ -1,12 +1,15 @@
 import Foundation
+import SwiftHTTPService
 import Testing
 @testable import SwiftMoE
+@testable import SwiftMoEHTTP
 
-/// When the server will listen in plain text somewhere other machines can reach.
+/// When the service will listen somewhere other machines can reach.
 ///
-/// The server does not speak TLS. Off loopback it requires a bearer key and then sends that
-/// key, and every prompt, unencrypted — so a bind other machines can reach has to be asked
-/// for by name, by an operator who has put something that does speak TLS in front of it.
+/// The key and every prompt cross the network, so off loopback the service terminates TLS itself
+/// (`--tls-cert`, `--tls-key`) or does not start. There is no way to say "a proxy handles it":
+/// that acknowledgement (`--allow-plaintext`) was removed with the move onto SwiftHTTPService.
+extension HTTPServiceTests {
 @Suite("HTTP server plain-text exposure")
 struct HTTPServerPlaintextTests {
 
@@ -14,76 +17,73 @@ struct HTTPServerPlaintextTests {
     /// so a listener that gets as far as `bind(2)` fails there instead of opening a port.
     private static let unassignedHost = "192.0.2.1"
 
-    private static func makeServer(host: String, allowPlaintext: Bool, authenticated: Bool = true) throws -> HTTPServer {
-        let authentication: HTTPServer.Authentication = authenticated
+    private static func makeService(host: String, tls: TLSFiles? = nil, authenticated: Bool = true) throws -> ChatService {
+        let authentication: Authentication = authenticated
             ? .bearer(BearerCredential(key: try APIKey(RunningServer.key)))
             : .unauthenticatedLoopback
-        return HTTPServer(host: host, port: 0, authentication: authentication, allowPlaintext: allowPlaintext,
-                          tokenizer: RunningServer.byteTokenizer) { _, _ in }
+        return ChatService(host: host, port: 0, authentication: authentication, tls: tls,
+                           tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
     }
 
-    @Test("Off loopback, a key is not enough: without the acknowledgement nothing is bound",
+    @Test("Off loopback, a key is not enough: without TLS nothing is bound",
           arguments: ["0.0.0.0", "192.0.2.1", "10.0.1.114"])
     func exposedPlaintextIsRefused(host: String) throws {
-        let server = try Self.makeServer(host: host, allowPlaintext: false)
-        #expect(throws: HTTPServerError.plaintextNotAcknowledged(host: host)) {
-            _ = try server.openListener()
+        let service = try Self.makeService(host: host)
+        #expect(throws: ServiceError.exposedPlaintext(host: host)) {
+            _ = try blocking { try await service.start() }
         }
-        #expect(server.boundAddress == nil)
-        #expect(!server.allowsPlaintext)
     }
 
-    @Test("With the acknowledgement the listener goes on to bind")
-    func acknowledgedPlaintextProceeds() throws {
-        let server = try Self.makeServer(host: Self.unassignedHost, allowPlaintext: true)
-        #expect(server.allowsPlaintext)
+    @Test("With a TLS identity the listener goes on to bind")
+    func tlsProceeds() throws {
+        let tls = try TestTLS()
+        defer { tls.cleanUp() }
+        let service = try Self.makeService(host: Self.unassignedHost, tls: tls.files)
         // The address belongs to no interface, so reaching bind(2) is as far as this can go:
         // the failure is the socket's, which shows the exposure check let it through.
-        #expect(throws: FlashMoEError.readFailed(errno: EADDRNOTAVAIL, context: "bind(192.0.2.1:0)")) {
-            _ = try server.openListener()
+        #expect(throws: ServiceError.bindFailed(host: Self.unassignedHost)) {
+            _ = try blocking { try await service.start() }
         }
-        #expect(server.boundAddress == nil)
     }
 
-    @Test("Loopback needs no acknowledgement, and giving one changes nothing",
-          arguments: [false, true])
-    func loopbackIsNotExposed(allowPlaintext: Bool) throws {
-        let server = try Self.makeServer(host: "127.0.0.1", allowPlaintext: allowPlaintext)
-        let bound = try server.openListener()
-        defer { server.stop() }
+    @Test("Loopback needs no TLS")
+    func loopbackIsNotExposed() throws {
+        let service = try Self.makeService(host: "127.0.0.1")
+        let bound = try blocking { try await service.start() }
+        defer { blocking { await service.shutdown() } }
         #expect(bound.host == "127.0.0.1")
     }
 
-    @Test("The acknowledgement does not excuse a missing key: that is still what is reported")
-    func acknowledgementIsNotACredential() throws {
-        let server = try Self.makeServer(host: "0.0.0.0", allowPlaintext: true, authenticated: false)
-        #expect(throws: HTTPServerError.credentialRequired(host: "0.0.0.0")) {
-            _ = try server.openListener()
-        }
-        #expect(server.boundAddress == nil)
-    }
-
-    @Test("The check on its own: loopback passes, anything else needs the acknowledgement")
-    func requirePlaintextAcknowledged() throws {
-        try HTTPServer.requirePlaintextAcknowledged(host: "127.0.0.1", allowPlaintext: false)
-        try HTTPServer.requirePlaintextAcknowledged(host: "127.8.9.10", allowPlaintext: false)
-        try HTTPServer.requirePlaintextAcknowledged(host: "0.0.0.0", allowPlaintext: true)
-        #expect(throws: HTTPServerError.plaintextNotAcknowledged(host: "0.0.0.0")) {
-            try HTTPServer.requirePlaintextAcknowledged(host: "0.0.0.0", allowPlaintext: false)
-        }
-        // Not an address at all: not loopback, so not excused.
-        #expect(throws: HTTPServerError.plaintextNotAcknowledged(host: "localhost")) {
-            try HTTPServer.requirePlaintextAcknowledged(host: "localhost", allowPlaintext: false)
+    @Test("TLS does not excuse a missing key: that is still what is reported")
+    func tlsIsNotACredential() throws {
+        let tls = try TestTLS()
+        defer { tls.cleanUp() }
+        let service = try Self.makeService(host: "0.0.0.0", tls: tls.files, authenticated: false)
+        #expect(throws: ServiceError.credentialRequired(host: "0.0.0.0")) {
+            _ = try blocking { try await service.start() }
         }
     }
 
-    @Test("The refusal names the flag, what it asserts, and the loopback alternative")
+    @Test("A certificate and key that cannot be used stop the service from starting, naming the fault")
+    func unfitIdentity() throws {
+        let service = try Self.makeService(
+            host: "127.0.0.1", tls: TLSFiles(certificateChainPath: "/nonexistent/chain.pem", privateKeyPath: "/nonexistent/key.pem"))
+        do {
+            _ = try blocking { try await service.start() }
+            Issue.record("a missing certificate was accepted")
+        } catch ServiceError.tlsIdentity(let detail) {
+            #expect(detail.contains("/nonexistent/chain.pem"))
+        } catch {
+            Issue.record("failed with \(error) instead of tlsIdentity")
+        }
+    }
+
+    @Test("The refusal names the flags and the loopback alternative")
     func refusalMessage() {
-        let message = HTTPServerError.plaintextNotAcknowledged(host: "0.0.0.0").errorDescription
+        let message = ServiceError.exposedPlaintext(host: "0.0.0.0").errorDescription
         #expect(message == "Refusing to listen on 0.0.0.0 in plain text: other machines can reach it, and the "
-            + "API key and every prompt would cross the network unencrypted. This server does not speak TLS. "
-            + "Bind loopback (--host 127.0.0.1) and put a TLS-terminating proxy on this machine in front of it; "
-            + "or, if a TLS-terminating proxy on the same trust boundary already fronts this port, "
-            + "pass --allow-plaintext.")
+            + "API key and every prompt would cross the network unencrypted. Give the server a "
+            + "certificate and key (--tls-cert and --tls-key), or bind loopback (--host 127.0.0.1).")
     }
+}
 }

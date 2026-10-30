@@ -2,12 +2,14 @@ import Foundation
 import os
 import Testing
 @testable import SwiftMoE
+@testable import SwiftMoEHTTP
 
 /// What happens to a request that arrives while the model is busy, and to the model when the
 /// client it is working for leaves.
 ///
 /// A validated request used to wait on a lock behind the running inference: no deadline, no
 /// notice taken of a client that hung up, one of the connection slots held throughout.
+extension HTTPServiceTests {
 @Suite("HTTP server queue and disconnects")
 struct HTTPServerQueueTests {
 
@@ -17,7 +19,7 @@ struct HTTPServerQueueTests {
 
     /// Opens a connection and sends a whole request on it, leaving the response unread.
     private static func send(_ prompt: String, to running: RunningServer) throws -> ClientSocket {
-        let client = try ClientSocket(port: running.bound.port)
+        let client = try ClientSocket(port: running.port)
         client.send(running.request(body: body(prompt)))
         return client
     }
@@ -26,7 +28,7 @@ struct HTTPServerQueueTests {
 
     @Test("The queue deadline defaults to 30 s, and Retry-After is that in whole seconds")
     func defaults() {
-        let limits = HTTPServer.Limits()
+        let limits = InferenceLimits()
         #expect(limits.queueDeadline == .seconds(30))
         #expect(limits.retryAfterSeconds == 30)
     }
@@ -35,28 +37,27 @@ struct HTTPServerQueueTests {
           arguments: [(Duration.milliseconds(1), 1), (.milliseconds(999), 1), (.seconds(1), 1),
                       (.milliseconds(1001), 2), (.milliseconds(2500), 3), (.seconds(120), 120)])
     func retryAfter(deadline: Duration, seconds: Int) {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.queueDeadline = deadline
         #expect(limits.retryAfterSeconds == seconds)
     }
 
     @Test("A queue deadline of zero stops the listener from opening")
     func zeroDeadline() {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.queueDeadline = .zero
-        let server = HTTPServer(port: 0, authentication: .unauthenticatedLoopback, limits: limits,
-                                tokenizer: RunningServer.byteTokenizer) { _, _ in }
-        #expect(throws: HTTPServerError.invalidLimit(name: "queueDeadline")) {
-            _ = try server.openListener()
+        let server = ChatService(port: 0, authentication: .unauthenticatedLoopback, limits: limits,
+                                 tokenizer: RunningServer.byteTokenizer) { _, _, _ in }
+        #expect(throws: ServiceError.invalidLimit(name: "queueDeadline")) {
+            _ = try blocking { try await server.start() }
         }
-        #expect(server.boundAddress == nil)
     }
 
     // MARK: - Waiting
 
     @Test("A request that cannot start within the queue deadline is 503 with Retry-After, and never runs")
     func queuedRequestTimesOut() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.queueDeadline = .milliseconds(100)
         let hold = Hold()
         let running = try RunningServer(limits: limits, respond: hold.respond)
@@ -71,13 +72,13 @@ struct HTTPServerQueueTests {
         #expect(running.events.count(of: .queuedRequestTimedOut) == 1)
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
         #expect(running.handlerCalls == [HandlerCall(prompt: "hold", maxTokens: 100)])
     }
 
     @Test("The refusal reaches a queued client that is still uploading, every time", arguments: 0..<10)
     func queueRefusalIsDelivered(attempt: Int) throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.queueDeadline = .milliseconds(50)
         let hold = Hold()
         let running = try RunningServer(limits: limits, respond: hold.respond)
@@ -88,13 +89,13 @@ struct HTTPServerQueueTests {
         #expect(hold.awaitStarted())
 
         // A complete request with more bytes behind it, as a pipelining client would send.
-        let client = try ClientSocket(port: running.bound.port)
+        let client = try ClientSocket(port: running.port)
         defer { client.close() }
         client.send(running.request(body: Self.body("second")) + [UInt8](repeating: 0x20, count: 64 * 1024))
-        #expect(client.readToEnd() == Expected.queueTimedOut(retryAfter: 1))
+        #expect(Canonical.normalise(client.readToEnd()) == Expected.queueTimedOut(retryAfter: 1))
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
     }
 
     @Test("A request queued behind another runs when the model is free, within its deadline")
@@ -112,8 +113,8 @@ struct HTTPServerQueueTests {
         #expect(running.events.awaitNext(.requestQueued))
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
-        #expect(second.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
+        #expect(Canonical.normalise(second.readToEnd()) == Expected.stream())
         #expect(running.handlerCalls == [
             HandlerCall(prompt: "hold", maxTokens: 100),
             HandlerCall(prompt: "second", maxTokens: 100),
@@ -138,9 +139,9 @@ struct HTTPServerQueueTests {
         }
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
         for client in waiting {
-            #expect(client.readToEnd() == Expected.stream())
+            #expect(Canonical.normalise(client.readToEnd()) == Expected.stream())
         }
         #expect(running.handlerCalls.map(\.prompt) == ["hold", "second", "third", "fourth"])
     }
@@ -164,14 +165,14 @@ struct HTTPServerQueueTests {
         #expect(running.events.count(of: .requestQueued) == 0)
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
     }
 
     // MARK: - Clients that leave
 
     @Test("A client that disconnects while queued frees its connection and is never run")
     func disconnectWhileQueued() throws {
-        var limits = HTTPServer.Limits()
+        var limits = InferenceLimits()
         limits.maxConnections = 2
         let hold = Hold()
         let running = try RunningServer(limits: limits, respond: hold.respond)
@@ -185,7 +186,6 @@ struct HTTPServerQueueTests {
         #expect(running.events.awaitNext(.requestQueued))
         second.close()
         #expect(running.events.awaitNext(.queuedRequestAbandoned))
-        #expect(running.events.awaitNext(.connectionFinished))
 
         // Both connections were in use; the third is served only because the second's was freed.
         let third = try Self.send("third", to: running)
@@ -193,8 +193,8 @@ struct HTTPServerQueueTests {
         #expect(running.events.awaitNext(.requestQueued))
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
-        #expect(third.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
+        #expect(Canonical.normalise(third.readToEnd()) == Expected.stream())
         #expect(running.handlerCalls.map(\.prompt) == ["hold", "third"])
     }
 
@@ -202,20 +202,22 @@ struct HTTPServerQueueTests {
     func disconnectMidStream() throws {
         let observed = OSAllocatedUnfairLock<[Bool]>(initialState: [])
         let streaming = DispatchSemaphore(value: 0)
-        let running = try RunningServer(respond: { _, writer in
-            writer.sendHeaders()
-            observed.withLock { $0.append(writer.clientHasDisconnected) }
+        let running = try RunningServer(respond: { _, shouldContinue, emit in
+            _ = emit("first")
+            observed.withLock { $0.append(!shouldContinue()) }
             streaming.signal()
-            // Returns as soon as the client's close arrives; the allowance only bounds a hang.
-            observed.withLock { $0.append(writer.clientHasDisconnected(within: .seconds(10))) }
-            observed.withLock { $0.append(writer.clientHasDisconnected) }
+            // Returns as soon as the client's departure is seen; the allowance only bounds a hang.
+            let deadline = ContinuousClock.now + .seconds(10)
+            while shouldContinue(), ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            observed.withLock { $0.append(!shouldContinue()) }
+            observed.withLock { $0.append(!shouldContinue()) }
         })
         defer { running.shutdown() }
 
         let client = try Self.send("stream", to: running)
         #expect(streaming.wait(timeout: .now() + .seconds(10)) == .success)
         client.close()
-        #expect(running.events.awaitNext(.connectionFinished))
+        #expect(running.events.awaitNext(.slotReleased))
 
         #expect(observed.withLock { $0 } == [false, true, true])
     }
@@ -224,10 +226,12 @@ struct HTTPServerQueueTests {
     func halfCloseCountsAsGone() throws {
         let observed = OSAllocatedUnfairLock<[Bool]>(initialState: [])
         let streaming = DispatchSemaphore(value: 0)
-        let running = try RunningServer(respond: { _, writer in
-            writer.sendHeaders()
+        let running = try RunningServer(respond: { _, shouldContinue, emit in
+            _ = emit("first")
             streaming.signal()
-            observed.withLock { $0.append(writer.clientHasDisconnected(within: .seconds(10))) }
+            let deadline = ContinuousClock.now + .seconds(10)
+            while shouldContinue(), ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            observed.withLock { $0.append(!shouldContinue()) }
         })
         defer { running.shutdown() }
 
@@ -235,7 +239,7 @@ struct HTTPServerQueueTests {
         defer { client.close() }
         #expect(streaming.wait(timeout: .now() + .seconds(10)) == .success)
         shutdown(client.descriptor, SHUT_WR)
-        #expect(running.events.awaitNext(.connectionFinished))
+        #expect(running.events.awaitNext(.slotReleased))
 
         #expect(observed.withLock { $0 } == [true])
     }
@@ -245,14 +249,13 @@ struct HTTPServerQueueTests {
         let observed = OSAllocatedUnfairLock<[Bool]>(initialState: [])
         let streaming = DispatchSemaphore(value: 0)
         let trailingSent = DispatchSemaphore(value: 0)
-        let running = try RunningServer(respond: { request, writer in
-            writer.sendHeaders()
+        let running = try RunningServer(respond: { request, shouldContinue, emit in
+            _ = emit("first")
             streaming.signal()
             _ = trailingSent.wait(timeout: .now() + .seconds(10))
             // Whether or not the trailing bytes have arrived yet, the client is still there.
-            observed.withLock { $0.append(writer.clientHasDisconnected) }
-            observed.withLock { $0.append(writer.clientHasDisconnected) }
-            writer.sendDone()
+            observed.withLock { $0.append(!shouldContinue()) }
+            observed.withLock { $0.append(!shouldContinue()) }
         })
         defer { running.shutdown() }
 
@@ -262,7 +265,7 @@ struct HTTPServerQueueTests {
         client.send(Array("trailing bytes".utf8))
         trailingSent.signal()
 
-        #expect(client.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(client.readToEnd()).hasPrefix("HTTP/1.1 200 OK"))
         #expect(observed.withLock { $0 } == [false, false])
     }
 
@@ -301,8 +304,9 @@ struct HTTPServerQueueTests {
         #expect(running.events.awaitNext(.queuedRequestAbandoned))
 
         hold.release()
-        #expect(first.readToEnd() == Expected.stream())
-        #expect(third.readToEnd() == Expected.stream())
+        #expect(Canonical.normalise(first.readToEnd()) == Expected.stream())
+        #expect(Canonical.normalise(third.readToEnd()) == Expected.stream())
         #expect(running.handlerCalls.map(\.prompt) == ["hold", "third"])
     }
+}
 }

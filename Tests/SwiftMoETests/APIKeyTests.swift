@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import SwiftMoE
+@testable import SwiftMoEHTTP
 
 /// Where the server's credential comes from, and how a presented one is compared.
 ///
@@ -35,10 +36,10 @@ struct APIKeyTests {
         let key = try APIKey(Self.minimalKey)
         #expect(key.authorizationHeaderValue == "Bearer \(Self.minimalKey)")
 
-        #expect(throws: HTTPServerError.keyTooShort(minimum: 32)) {
+        #expect(throws: ServiceError.keyTooShort(minimum: 32)) {
             _ = try APIKey(String(repeating: "k", count: 31))
         }
-        #expect(throws: HTTPServerError.keyTooShort(minimum: 32)) {
+        #expect(throws: ServiceError.keyTooShort(minimum: 32)) {
             _ = try APIKey("")
         }
     }
@@ -48,10 +49,10 @@ struct APIKeyTests {
         let key = try APIKey("  \(Self.minimalKey)\n")
         #expect(key.authorizationHeaderValue == "Bearer \(Self.minimalKey)")
 
-        #expect(throws: HTTPServerError.keyNotPrintable) {
+        #expect(throws: ServiceError.keyNotPrintable) {
             _ = try APIKey(String(repeating: "k", count: 20) + " " + String(repeating: "k", count: 20))
         }
-        #expect(throws: HTTPServerError.keyNotPrintable) {
+        #expect(throws: ServiceError.keyNotPrintable) {
             _ = try APIKey(String(repeating: "k", count: 20) + "\r\n" + String(repeating: "k", count: 20))
         }
     }
@@ -79,7 +80,7 @@ struct APIKeyTests {
     func permissiveFile(mode: Int) throws {
         let url = try Self.scratchFile(mode: mode, contents: Self.otherKey)
         defer { Self.remove(url) }
-        #expect(throws: HTTPServerError.keyFilePermissions(path: url.path, mode: mode)) {
+        #expect(throws: ServiceError.keyFilePermissions(path: url.path, mode: mode)) {
             _ = try APIKey(contentsOf: url)
         }
     }
@@ -88,18 +89,18 @@ struct APIKeyTests {
     func unusableFiles() throws {
         let missing = try #require(TestPaths.resolve("moe-api-key-missing-\(UUID().uuidString)",
                                                      within: TestPaths.scratchRoot))
-        #expect(throws: HTTPServerError.keyFileUnreadable(path: missing.path)) {
+        #expect(throws: ServiceError.keyFileUnreadable(path: missing.path)) {
             _ = try APIKey(contentsOf: missing)
         }
 
-        #expect(throws: HTTPServerError.keyFileUnreadable(path: TestPaths.scratchRoot.path)) {
+        #expect(throws: ServiceError.keyFileUnreadable(path: TestPaths.scratchRoot.path)) {
             _ = try APIKey(contentsOf: TestPaths.scratchRoot)
         }
 
         let big = try Self.scratchFile(mode: 0o600,
                                        contents: String(repeating: "k", count: APIKey.maximumFileBytes + 1))
         defer { Self.remove(big) }
-        #expect(throws: HTTPServerError.keyFileTooLarge(path: big.path, limit: 4096)) {
+        #expect(throws: ServiceError.keyFileTooLarge(path: big.path, limit: 4096)) {
             _ = try APIKey(contentsOf: big)
         }
     }
@@ -118,7 +119,7 @@ struct APIKeyTests {
         let key = try APIKey.load(keyFile: nil, environment: ["SWIFT_MOE_API_KEY": Self.minimalKey])
         #expect(key?.authorizationHeaderValue == "Bearer \(Self.minimalKey)")
 
-        #expect(throws: HTTPServerError.keyTooShort(minimum: 32)) {
+        #expect(throws: ServiceError.keyTooShort(minimum: 32)) {
             _ = try APIKey.load(keyFile: nil, environment: ["SWIFT_MOE_API_KEY": ""])
         }
     }
@@ -173,7 +174,7 @@ struct APIKeyTests {
     @Test("A key means bearer authentication, on loopback and off it")
     func keyMeansBearer() throws {
         for host in ["127.0.0.1", "0.0.0.0", "10.0.1.114"] {
-            let resolved = try HTTPServer.Authentication.resolve(
+            let resolved = try Authentication.resolve(
                 host: host, keyFile: nil,
                 environment: ["SWIFT_MOE_API_KEY": Self.minimalKey], noAuth: false)
             guard case .bearer(let credential) = resolved else {
@@ -187,8 +188,8 @@ struct APIKeyTests {
     @Test("No key and no flag refuses to start, on loopback and off it")
     func noKeyRefuses() {
         for host in ["127.0.0.1", "0.0.0.0", "10.0.1.114"] {
-            #expect(throws: HTTPServerError.credentialRequired(host: host)) {
-                _ = try HTTPServer.Authentication.resolve(host: host, keyFile: nil,
+            #expect(throws: ServiceError.credentialRequired(host: host)) {
+                _ = try Authentication.resolve(host: host, keyFile: nil,
                                                           environment: [:], noAuth: false)
             }
         }
@@ -196,7 +197,7 @@ struct APIKeyTests {
 
     @Test("--no-auth is honoured on loopback only")
     func noAuthIsLoopbackOnly() throws {
-        let resolved = try HTTPServer.Authentication.resolve(host: "127.0.0.1", keyFile: nil,
+        let resolved = try Authentication.resolve(host: "127.0.0.1", keyFile: nil,
                                                              environment: [:], noAuth: true)
         guard case .unauthenticatedLoopback = resolved else {
             Issue.record("loopback --no-auth resolved to \(resolved)")
@@ -204,8 +205,8 @@ struct APIKeyTests {
         }
 
         for host in ["0.0.0.0", "10.0.1.114", "localhost"] {
-            #expect(throws: HTTPServerError.credentialRequired(host: host)) {
-                _ = try HTTPServer.Authentication.resolve(host: host, keyFile: nil,
+            #expect(throws: ServiceError.credentialRequired(host: host)) {
+                _ = try Authentication.resolve(host: host, keyFile: nil,
                                                           environment: [:], noAuth: true)
             }
         }
@@ -213,8 +214,8 @@ struct APIKeyTests {
 
     @Test("--no-auth together with a key is a contradiction, not a silent choice")
     func noAuthWithKeyIsRefused() {
-        #expect(throws: HTTPServerError.conflictingAuthentication) {
-            _ = try HTTPServer.Authentication.resolve(
+        #expect(throws: ServiceError.conflictingAuthentication) {
+            _ = try Authentication.resolve(
                 host: "127.0.0.1", keyFile: nil,
                 environment: ["SWIFT_MOE_API_KEY": Self.minimalKey], noAuth: true)
         }
@@ -222,27 +223,27 @@ struct APIKeyTests {
 
     @Test("Every refusal has a written explanation")
     func errorDescriptions() {
-        #expect(HTTPServerError.keyTooShort(minimum: 32).errorDescription
+        #expect(ServiceError.keyTooShort(minimum: 32).errorDescription
             == "The API key must be at least 32 characters. Generate one with `openssl rand -hex 32`.")
-        #expect(HTTPServerError.keyNotPrintable.errorDescription
+        #expect(ServiceError.keyNotPrintable.errorDescription
             == "The API key must be printable ASCII with no spaces.")
-        #expect(HTTPServerError.keyFileUnreadable(path: "/x/key").errorDescription
+        #expect(ServiceError.keyFileUnreadable(path: "/x/key").errorDescription
             == "The API key file /x/key could not be read as a regular file.")
-        #expect(HTTPServerError.keyFilePermissions(path: "/x/key", mode: 0o644).errorDescription
+        #expect(ServiceError.keyFilePermissions(path: "/x/key", mode: 0o644).errorDescription
             == "The API key file /x/key has mode 644; it must not be readable, writable or executable by group or other (chmod 600).")
-        #expect(HTTPServerError.keyFileTooLarge(path: "/x/key", limit: 4096).errorDescription
+        #expect(ServiceError.keyFileTooLarge(path: "/x/key", limit: 4096).errorDescription
             == "The API key file /x/key is larger than 4096 bytes.")
-        #expect(HTTPServerError.credentialRequired(host: "0.0.0.0").errorDescription
+        #expect(ServiceError.credentialRequired(host: "0.0.0.0").errorDescription
             == "No API key is configured for the listener on 0.0.0.0. Set SWIFT_MOE_API_KEY or pass --api-key-file <path>. A listener that is not on loopback cannot run without one.")
-        #expect(HTTPServerError.credentialRequired(host: "127.0.0.1").errorDescription
+        #expect(ServiceError.credentialRequired(host: "127.0.0.1").errorDescription
             == "No API key is configured for the listener on 127.0.0.1. Set SWIFT_MOE_API_KEY or pass --api-key-file <path>. On loopback, --no-auth starts it without one.")
-        #expect(HTTPServerError.conflictingAuthentication.errorDescription
+        #expect(ServiceError.conflictingAuthentication.errorDescription
             == "--no-auth was given together with an API key. Remove one of them.")
-        #expect(HTTPServerError.invalidOrigin("*").errorDescription
+        #expect(ServiceError.invalidOrigin("*").errorDescription
             == "\"*\" is not an origin. Use scheme://host[:port] with no path, for example http://localhost:3000.")
-        #expect(HTTPServerError.invalidLimit(name: "maxBodyBytes").errorDescription
+        #expect(ServiceError.invalidLimit(name: "maxBodyBytes").errorDescription
             == "The limit maxBodyBytes must be greater than zero.")
-        #expect(HTTPServerError.missingValue(option: "--api-key-file").errorDescription
+        #expect(ServiceError.missingValue(option: "--api-key-file").errorDescription
             == "--api-key-file requires a value.")
     }
 }
