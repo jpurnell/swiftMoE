@@ -13,11 +13,11 @@ Streams 200GB+ MoE models from NVMe SSD through a custom Metal compute pipeline,
 - **Runtime Configurable** -- `ModelConfig` presets for any MoE architecture (Qwen, DeepSeek, etc.)
 - **OpenAI-Compatible Server** -- `/v1/chat/completions` with SSE streaming, bearer-key authentication, and a bound on everything a request can cost
 - **Pure Swift** -- No Python, no ML frameworks, no C dependencies (except optional linenoise for TUI)
-- **226 Tests** -- Tiny synthetic model fixtures; the server is tested over a real loopback socket
+- **254 Tests** -- Tiny synthetic model fixtures; the server is tested over a real loopback socket
 
 ## Status
 
-Pre-1.0: the first tagged version is 0.1.0. The engine is verified against synthetic fixtures
+Pre-1.0: the current version is 0.2.0 (0.1.0 was the first tag). The engine is verified against synthetic fixtures
 and a CPU reference; it has **not** yet been run against the real Qwen3.5-397B weights, and
 `swift-moe-server` serves only the synthetic `--demo` model (`--model` is not implemented).
 
@@ -32,7 +32,7 @@ As a package dependency:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jpurnell/swiftMoE", from: "0.1.0"),
+    .package(url: "https://github.com/jpurnell/swiftMoE", from: "0.2.0"),
 ],
 targets: [
     .target(name: "YourTarget", dependencies: [.product(name: "SwiftMoE", package: "swiftMoE")]),
@@ -79,80 +79,51 @@ The key file must not be readable, writable or executable by group or other (`ch
 | Situation | What happens |
 |---|---|
 | Key configured, loopback | Bearer authentication |
-| Key configured, any other `--host` | Refuses to start unless `--allow-plaintext` is given (below) |
+| Key configured, any other `--host` | Refuses to start unless `--tls-cert` and `--tls-key` are given (below) |
 | No key, loopback, `--no-auth` | Starts unauthenticated, with a warning in the log |
 | No key, loopback, no flag | Refuses to start |
-| No key, any other `--host` | Refuses to start; neither `--no-auth` nor `--allow-plaintext` changes this |
+| No key, any other `--host` | Refuses to start; neither `--no-auth` nor TLS changes this |
 | Key and `--no-auth` | Refuses to start: a contradiction |
 
-It listens on `127.0.0.1` unless `--host <ipv4>` says otherwise.
+It listens on `127.0.0.1` unless `--host <address>` says otherwise.
 
-### TLS: put a proxy in front
+### TLS: the server terminates it
 
-The server speaks plain HTTP. It does not do TLS: the key, the prompts and the completions
-are readable to anything on the path. On loopback there is no
-path. Anywhere else the server refuses to start —
+On loopback the server speaks plain HTTP and nothing crosses a network. Anywhere else the key, the
+prompts and the completions would be readable to anything on the path, so the server refuses to
+start unless it holds a certificate and key of its own:
+
+```bash
+swift run swift-moe-server --demo --host 0.0.0.0 --port 8443 \
+    --api-key-file ~/.swift-moe-key \
+    --tls-cert /etc/ssl/moe.example.com/fullchain.pem \
+    --tls-key  /etc/ssl/moe.example.com/privkey.pem
+```
+
+`--tls-cert` is the PEM chain, leaf first; `--tls-key` is the PEM private key and must not be
+readable by group or other (`chmod 600`). Without them, off loopback:
 
 ```
 swift-moe-server: Refusing to listen on 0.0.0.0 in plain text: other machines can reach it, and
-the API key and every prompt would cross the network unencrypted. This server does not speak
-TLS. Bind loopback (--host 127.0.0.1) and put a TLS-terminating proxy on this machine in front
-of it; or, if a TLS-terminating proxy on the same trust boundary already fronts this port, pass
---allow-plaintext.
+the API key and every prompt would cross the network unencrypted. Give the server a certificate
+and key (--tls-cert and --tls-key), or bind loopback (--host 127.0.0.1).
 ```
 
-— unless you pass `--allow-plaintext`. That flag is a statement, not a feature: it says a
-TLS-terminating proxy on the same trust boundary (a private link you control) fronts this
-port. It encrypts nothing.
+`SIGHUP` reloads the certificate and key from the same files without a restart; new connections
+get the new identity, and if the new files are unfit the old one keeps being served. The server
+speaks HTTP/1.1 only, one request per connection.
 
-The arrangement to prefer needs no flag: leave the server on `127.0.0.1` and run the proxy on
-the same machine.
+**The reverse-proxy recipe is superseded.** Earlier versions served plain HTTP and told you to put
+Caddy or nginx in front, with `--allow-plaintext` to say so. That flag is gone (0.2.0): the
+transport has no way to be told that something else encrypts the hop. A proxy on the same machine
+still works against a loopback bind and still has to send the upstream `Host`
+(`127.0.0.1:<port>`) and not buffer the response; a proxy on another machine now needs the server
+to terminate TLS as well.
 
-```bash
-swift run swift-moe-server --demo --port 8080 --api-key-file ~/.swift-moe-key
-```
-
-On a loopback bind the server checks `Host` (see **Browsers** below), so the proxy must send
-the upstream authority, `127.0.0.1:8080`, not the public name. It must also not buffer the
-response, or tokens arrive all at once at the end.
-
-Caddy:
-
-```
-moe.example.com {
-    reverse_proxy 127.0.0.1:8080 {
-        header_up Host {upstream_hostport}
-        flush_interval -1
-    }
-}
-```
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name moe.example.com;
-    ssl_certificate     /etc/ssl/moe.example.com/fullchain.pem;
-    ssl_certificate_key /etc/ssl/moe.example.com/privkey.pem;
-
-    location /v1/chat/completions {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host 127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-        client_max_body_size 64k;
-    }
-}
-```
-
-The proxy forwards `Authorization` untouched, so clients still present the key — now inside
-TLS. The proxy does not replace the key: anything on the proxy's machine can still reach
-`127.0.0.1:8080` directly. If the proxy is on another machine, the server needs
-`--host <address> --allow-plaintext`, and the link between the two is exactly as private as
-you have made it.
+**How long a response may take.** A stream ends after two hours, whatever it is doing
+(`InferenceLimits.maxStreamDuration`). At the measured 4.4 tokens per second a full 8,192-token
+completion takes about 31 minutes, so two hours is the longest completion the server will deliver.
+A reader that stops reading ends its stream after 30 seconds (`writeDeadline`).
 
 **Browsers.** No CORS headers are sent, and a request carrying an `Origin` is refused (`403`),
 unless the origin was allowed: `--allow-origin http://localhost:3000` (repeatable, compared
@@ -167,9 +138,10 @@ exactly). On loopback the `Host` header must be `127.0.0.1:<port>` or `localhost
 | Prompt tokens + completion tokens | 8192 | `400`, giving all three numbers |
 | Request body | 64 KiB | `413` |
 | Request line and headers | 16 KiB | `431` |
-| Time to send the whole request | 10 s | `408` |
+| Time to send the request head, and then the body (each) | 10 s | `408` |
 | Time waiting for the model behind another request | 30 s | `503` with `Retry-After` |
-| Connections at once — sending, waiting, or being answered | 16 | `503` with `Retry-After` |
+| Connections at once — sending, waiting, or being answered | 16 | the connection is closed with no response |
+| Time one response may take to deliver | 2 h | the stream ends, truncated |
 
 8192 is the number of positions the KV caches are allocated for
 (`TokenGenerator.defaultMaxSequenceLength`). The prompt is counted with the tokenizer the server
@@ -183,8 +155,9 @@ in the queue, or, if its request is running, stops the generation at the next to
 side of the connection open until you have the answer: a half-closed connection looks the same
 as a closed one.
 
-Library users set these with `HTTPServer.Limits` and create the server with
-`HTTPServer(port:authentication:allowedOrigins:limits:allowPlaintext:tokenizer:handler:)`.
+Library users import `SwiftMoEHTTP`, set these with `InferenceLimits`, and create the service with
+`ChatService(host:port:authentication:allowedOrigins:limits:tls:tokenizer:generate:)`. The
+`SwiftMoE` library itself imports no networking code.
 
 ## Architecture
 
@@ -203,13 +176,14 @@ SwiftMoE/
       Inference/      LayerPipeline, TokenGenerator, DeferredExpertState,
                       KVCache, LinearAttentionState, TopK, Embedding,
                       LayerWeightCache, BPETokenizer
-      Server/         HTTPServer, APIKey, HTTPConnection, HTTPRequestHead,
-                      HTTPRefusal, ClientConnection, InferenceQueue, SSEWriter,
-                      SessionStore
+      Server/         SessionStore
+    SwiftMoEHTTP/     Library: the OpenAI-compatible service on SwiftHTTPService --
+                      ChatService, InferenceGate, GenerationBridge, InferenceLimits,
+                      APIKey, ChatRequest, ChatChunk, OpenAIError
     SwiftMoEServer/   Executable: OpenAI-compatible HTTP server
     SwiftMoEChat/     Executable: Interactive TUI chat client
   Tests/
-    SwiftMoETests/    226 tests across 35 suites (2s)
+    SwiftMoETests/    254 tests across 40 suites
   metal_infer/        Original Obj-C/Metal reference implementation
 ```
 

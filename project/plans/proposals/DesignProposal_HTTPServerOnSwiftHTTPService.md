@@ -1,6 +1,6 @@
 # Design Proposal: Move the HTTP server onto SwiftHTTPService
 
-**Status:** Approved by the owner 2026-10-30, with every recommendation below accepted (section 13 records the decisions). **Author's note:** every claim about SwiftHTTPService (the kit) below was
+**Status:** Implemented in v0.2.0 (2026-10-30). Approved by the owner 2026-10-30, with every recommendation below accepted (section 13 records the decisions); the differences the replay found beyond section 7 were accepted the same day and are the table at the end of section 7. **Author's note:** every claim about SwiftHTTPService (the kit) below was
 checked against its source at v0.4.1 (`Sources/SwiftHTTPService*`), and every claim about this server against
 `Sources/SwiftMoE/Server/*` and `Sources/SwiftMoEServer/main.swift` at `main` (tag `v0.1.0`). Where a claim rests on
 behaviour I could not confirm by reading, it is marked **verify** and has a spike in section 10.
@@ -41,7 +41,7 @@ change **except the four rows marked K**.
 | Whole-response budget (an **open item** today) | none | `maximumStreamDuration`, `maximumStreamBytes` | **Closed by the kit** |
 | Connection cap 16, 503 with `Retry-After` beyond it | `maxConnections`, `refuseBusy` | `maximumConnections` (the kit's own refusal; the `Retry-After` value is the kit's, **verify**) | Covered; verify header |
 | One request per connection, `Connection: close` | every response | `connections: .closeAfterResponse` | Covered |
-| HTTP/1.0 and 1.1 accepted, 505 otherwise | `supportedVersions` | The kit parses 1.0 and 1.1 and answers `HTTP/1.1` | Covered (a 1.0 client is answered 1.1, as SwiftPushHub found) |
+| HTTP/1.0 and 1.1 accepted, 505 otherwise | `supportedVersions` | The kit parses 1.0 and 1.1 and answers a 1.0 client with an `HTTP/1.0` status line (corrected after implementation; this row said `HTTP/1.1`); an `HTTP/2.0` request line is 400, not 505 | Covered; the 505 is a difference (table in section 7) |
 | SSE: `data: {chunk}\n\n`, then `finish_reason`, then `data: [DONE]` | `SSEWriter` | `Response.eventStream` and `EventWriter.send(data:)`; the JSON is one line, so no `data:` splitting | Covered |
 | Stream ends truncated (no `[DONE]`) when generation fails | `main.swift` | A producer that throws makes the kit close the connection without the chunk terminator | Covered (`streamEnded(clean: false)`) |
 | Bearer key: file mode check, env var, constant-time compare, never logged, required off loopback | `APIKey`, `BearerCredential`, `Authentication` | **Application logic.** The kit has no authentication, by design. Moves unchanged and becomes one `Middleware` | Covered (app) |
@@ -168,14 +168,14 @@ The `SwiftMoE` library target itself still imports none of them. A consumer of t
 
 | Request | Today | After |
 |---|---|---|
-| `Transfer-Encoding: chunked` upload | `501` OpenAI-shaped | **Verify (add to S5):** whether the kit accepts a chunked body within the bound or refuses it. Either is acceptable; the old `501` was a limitation of the hand-rolled reader, not a rule worth keeping |
+| `Transfer-Encoding: chunked` upload | `501` OpenAI-shaped | **Accepted within the bound** (S5): a chunked body under 64 KiB is served; over it is 413 |
 | A slow client sending head then body | One 10 s budget for both | Up to 10 s for the head plus 10 s for the body |
 | `Date`/`Server` headers, header order | None / fixed | Whatever the kit emits |
 | Malformed target (`//`, dot segments, bad `%`) | 404 | 400 `malformed_target`, OpenAI-shaped via the refusal hook |
-| HTTP/1.0 | Answered `HTTP/1.1` (recorded: the old server never answered 1.0) | Same; no change |
+| HTTP/1.0 | Answered `HTTP/1.1` (recorded: the old server never answered 1.0) | **Answered `HTTP/1.0`** (the kit mirrors the client's version; an earlier draft of this row and of section 3 said `HTTP/1.1`, which the implementation showed to be wrong) |
 | `Cache-Control` on the stream | `no-cache` | `no-store` |
 | `stream: false` | Ignored: always SSE | Unchanged (a separate feature, not part of this move) |
-| Connection beyond the cap | `503` + `Retry-After: queueDeadline` | The kit's refusal; `Retry-After` **verify** and set to match |
+| Connection beyond the cap | `503` + `Retry-After: queueDeadline` | **Closed with no response at all: no 503, no Retry-After** (spike S5; a known regression, see the table below) |
 
 **Found by the recording (2026-10-30), to be preserved unless the owner decides otherwise:**
 - The old stream has no `Content-Length` and ends by closing the connection; the kit's event stream is chunked, so `Transfer-Encoding: chunked` appears. Allowed header change; the body bytes must match.
@@ -183,6 +183,22 @@ The `SwiftMoE` library target itself still imports none of them. A consumer of t
 - `max_tokens: null` is treated as absent; `64.0` and `1e1` are accepted as whole numbers. Keep (the parse moves unchanged).
 - The busy refusal carries `Retry-After` equal to the queue deadline and no `Date`. The preflight sends `Access-Control-Allow-Methods: POST` and `Access-Control-Allow-Headers: Authorization, Content-Type` (K2's defaults match).
 - A query string on the route (`?stream=true`) is ignored and the request is served. Keep.
+
+**Differences the replay found beyond the table above (accepted 2026-10-30).** The old server's recorded exchanges
+were replayed against the new one (`WireCharacterizationTests`); these nine differ and were not predicted. Each is an
+`intended` entry with its reason in that test, and the replay fails on any difference that is not in it.
+
+| # | Exchange | Old server | New server | Cause |
+|---|---|---|---|---|
+| 1 | A connection past `maxConnections` | `503` + `Retry-After: 30` | **Closed with no response** | The kit's registry drops the connection. **A known regression against the old server**, caused by the kit and not worked around in this package; clients see a reset and have no `Retry-After` to honour |
+| 2 | No `Host` header | `421` | `400 Malformed HTTP request.` | The transport requires exactly one `Host` before any middleware runs |
+| 3 | `HTTP/2.0` on an HTTP/1 request line | `505` | `400 Malformed HTTP request.` | The transport's parser |
+| 4 | A body shorter than its `Content-Length`; a client that sends nothing | `400`; `408` | Connection closed, no response | The transport; the head timer starts at the first byte, and a short body closes |
+| 5 | Preflight from an allowed origin for a path that is not the route | `404` | `204` (any path) | The kit's CORS layer answers every preflight itself; it also omits `Content-Length: 0` |
+| 6 | Status line for a body over the bound | `413 Content Too Large` | `413 Payload Too Large` | The transport's reason phrase |
+| 7 | A body declared over the bound, with a wrong or missing key | `401` | `413` | The route bound is checked before any middleware, so the body is refused unread (the property the old order protected) |
+| 8 | An `HTTP/1.0` request | Answered `HTTP/1.1` | Answered `HTTP/1.0` | The kit mirrors the client's version |
+| 9 | A header limit below 1 KiB | Accepted (the old test used 512) | `ServiceError.invalidConfiguration` | `ServiceConfiguration` bounds `maximumHeaderBytes` to 1 KiB or more |
 
 ## 8. Test strategy (TDD; every assertion able to fail for the reason its test is named for)
 

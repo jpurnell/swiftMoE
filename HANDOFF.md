@@ -1,16 +1,18 @@
 # HANDOFF — SwiftMoE
 
-**Last session:** 2026-10-09 (bounded work, and preparation for the first tag — see `project/summaries/2026-10-09_BoundedWork.md`)
-**Branch:** `fix/bounded-work` (PR open against `main`, not merged, not tagged)
-**State:** Green. Quality gate 0/0, 226 tests passing, nothing in progress.
+**Last session:** 2026-10-30 (the HTTP server moved onto SwiftHTTPService, v0.2.0 — see `project/summaries/2026-10-30_HTTPOnKit.md`)
+**Branch:** `main` at `v0.2.0`
+**State:** Green. Quality gate 0/0, 254 tests in 40 suites, nothing in progress.
 
-`swift-moe-server` now refuses a prompt that does not fit in a sequence (400), gives a queued
-request 30 s to start (503 + `Retry-After`), stops generating for a client that has left, and
-will not bind anything but loopback without `--allow-plaintext`. The inference layer throws
-instead of dropping context.
+The raw-socket server is gone. `SwiftMoEHTTP` (new library) serves `POST /v1/chat/completions` on
+`SwiftHTTPService` 0.5.0: TLS in the process (`--tls-cert`, `--tls-key`, SIGHUP reload),
+`--allow-plaintext` removed, a two-hour bound on a response, graceful shutdown. `SwiftMoE` imports no
+networking.
 
-**The next thing to do is tag 0.1.0**, once the PR is merged. The summary lists exactly what
-the tagging commit has to change.
+**Known regression, accepted:** a connection past `maxConnections` is closed with no `503` and no
+`Retry-After` (the kit). Eight other accepted differences are in the CHANGELOG under 0.2.0 "Changed".
+
+**The next things** are the ones in "Next step" below; none is blocked by this release.
 
 ---
 
@@ -21,7 +23,7 @@ config exclusions:
 
 ```bash
 quality-gate --check all               # 49 of 49 checkers; 4 are not applicable and SKIP
-swift test                             # 226 tests, 35 suites, ~2 s
+swift test                             # 254 tests, 40 suites, ~45 s (the server tests drive real sockets)
 cd metal_infer && make                 # builds; 19 pre-existing warnings
 ```
 
@@ -29,10 +31,21 @@ The plain `quality-gate` invocation (what the pre-commit hook runs) selects 43 o
 the pre-push hook runs `--check all`. Use `--continue-on-failure` when investigating: the gate
 halts at the first failing checker otherwise.
 
-The server tests drive a real `HTTPServer` on a loopback ephemeral port
+The server tests drive a real `ChatService` on a loopback ephemeral port
 (`Tests/SwiftMoETests/HTTPTestSupport.swift`). Where a test needs the server to have reached a
-state — a request queued, a connection released — it waits on `RunningServer.events`, which
-the server feeds through an internal observer. Do not replace those waits with sleeps.
+state — a request queued, a slot released — it waits on `RunningServer.events`, which the service
+feeds through an internal observer. Do not replace those waits with sleeps.
+
+**Every socket test lives under `HTTPServiceTests`, which is `.serialized`.** Swift Testing runs a
+synchronous test on a cooperative-pool thread; a test that blocks that thread on a socket needs the
+server's tasks to get a pool thread, so enough of them at once deadlock the whole run. Put a new
+socket test in an `extension HTTPServiceTests`. `blocking { }` runs async setup on a thread pool of
+its own for the same reason.
+
+`Tests/SwiftMoETests/Fixtures/exchanges.json` is the OLD server's recorded wire behaviour (85
+exchanges, from v0.1.0). Never regenerate it to make a test pass. `WireCharacterizationTests`
+replays it against the current server and fails on any difference that is not in its tables
+(`expectedToChange`, `intended`, the stream header changes).
 
 ## Worth carrying forward
 
@@ -45,15 +58,16 @@ From the bounded-work session (2026-10-09):
   position that continues, and a cache keyed by conversation.
 - **`KVCache.append` throws at capacity.** Do not "fix" a `sequenceCapacityExceeded` by
   catching it and carrying on: the point is that a truncated history is never computed from.
-- **The server owns the tokenizer.** `HTTPServer(tokenizer:)` counts the prompt and hands the
-  same tokens to the handler in `HTTPServer.Request`. `--model` mode should pass the BPE
-  tokenizer through that parameter, not tokenize again in the handler.
-- **A handler must ask `writer.clientHasDisconnected`.** The server cannot interrupt a
-  handler. `swift-moe-server` passes it to `generate(shouldContinue:)`.
-- **A half-closed client counts as gone.** `poll(2)` cannot tell `shutdown(SHUT_WR)` from
-  `close`. This is documented in the README and CHANGELOG as a client requirement.
-- **Every response ends with a drain, streams included.** Closing a socket over unread bytes
-  resets it and the client loses what it had not read yet.
+- **The service owns the tokenizer.** `ChatService(tokenizer:)` counts the prompt and hands the
+  same tokens to the generator in `ChatCompletionRequest`. `--model` mode should pass the BPE
+  tokenizer through that parameter, not tokenize again in the generator.
+- **A generator must ask `shouldContinue()` and honour `emit` returning false.** The service cannot
+  interrupt it. The client leaving cancels the stream's task (the kit does that), which sets the flag
+  `shouldContinue` reads before every token, prompt tokens included.
+- **The slot outlives the stream by one thing: the generator thread.** The producer awaits
+  `GenerationBridge.stopped()` before it returns, so the next request never starts while the model is
+  still being used. Do not remove that wait.
+- **A half-closed client still counts as gone** (tested): the kit cancels on FIN.
 
 From the quality-gate session (2026-08-25, `project/summaries/2026-08-25_QualityGateZeroZero.md`):
 
@@ -85,8 +99,9 @@ From the quality-gate session (2026-08-25, `project/summaries/2026-08-25_Quality
 3. **`swift-moe-server --model`.** Not implemented; the server only serves `--demo`.
 4. **Performance benchmarking vs. the original C engine.** No Swift-side numbers exist yet.
    The C engine's baseline is 4.36 tok/s at 4-bit (see `CLAUDE.md`).
-5. The open server items in `project/master_plan.md` under Remaining: a whole-response
-   deadline, unauthenticated connection slots, a mid-stream error event.
+5. The open server items in `project/master_plan.md` under Remaining: the connection-cap `503`
+   (needs a kit change), unauthenticated connection slots, and the mid-stream error event (decided:
+   keep the truncation).
 6. **Additional model presets** (DeepSeek-V3, Mixtral).
 
 ## Known noise (pre-existing, outside the gate)

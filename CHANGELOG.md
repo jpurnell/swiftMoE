@@ -4,6 +4,119 @@ All notable changes to SwiftMoE are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
+The HTTP server moves onto [SwiftHTTPService](https://github.com/jpurnell/SwiftHTTPService) 0.5.0.
+Nothing is left of the raw-socket listener: about 1,880 lines of it are deleted, and the part
+of the service that is particular to a model server (the credential, the sequence budget, the
+queue for the one model, the bridge to the generator thread) is rewritten around the kit's
+`Router`, middleware and event streams. A minor version, because the public API of the library
+changes (below).
+
+### Removed (breaking)
+Public API of the `SwiftMoE` library, all of it the old server's, which now lives in the new
+`SwiftMoEHTTP` library (`import SwiftMoEHTTP`):
+
+| Removed from `SwiftMoE` | Now |
+|---|---|
+| `HTTPServer` (+ `Request`, `Tokenizer`, `BoundAddress`, `openListener()`, `start()`, `stop()`) | `ChatService` (+ `ChatCompletionRequest`, `Tokenizer`, `Generate`, `start()`, `run()`, `shutdown()`) |
+| `HTTPServer.Limits` | `InferenceLimits` |
+| `HTTPServer.Authentication` | `Authentication` |
+| `HTTPServerError` | `ServiceError` |
+| `SSEWriter` and its handler contract `(Request, SSEWriter) -> Void` | `ChatService.Generate`: `(request, shouldContinue, emit) throws -> Void` |
+| `APIKey`, `BearerCredential` | the same names, moved |
+| `Limits.refusalDrainDeadline` | none: the transport owns connection teardown |
+| `--allow-plaintext`, `ServiceError.plaintextNotAcknowledged`, `HTTPServer.requirePlaintextAcknowledged` | none: see TLS below |
+
+`SwiftMoE` imports no networking code; `SwiftMoEHTTP` depends on `SwiftHTTPService` and
+`SwiftHTTPServiceNIO`, which bring `swift-nio`, `swift-nio-http2`, `swift-http-types`,
+`swift-nio-extras` and `SwiftTLSKit` into the package's resolution. The chat client now links
+`SwiftMoEHTTP` for `APIKey`. `SwiftMoEHTTP` is a new library product.
+
+### Added
+- **TLS in the process.** `--tls-cert <chain.pem>` and `--tls-key <key.pem>`. Off loopback the
+  server refuses to start without them; `SIGHUP` reloads the identity without a restart. The
+  reverse-proxy recipe in the README is superseded and `--allow-plaintext` is gone (decision O2).
+- **A bound on how long a response may take**: `InferenceLimits.maxStreamDuration`, two hours
+  (decision O5). This closes the master plan's open "no bound on how long one response may take
+  to deliver". A reader that stops reading ends its stream after `writeDeadline` (30 s).
+- **Graceful shutdown**: SIGINT and SIGTERM stop accepting, let a stream in flight finish for
+  `shutdownGrace` (10 s), then close.
+- **`InferenceGate`**, an actor in place of `InferenceQueue`: first come first served, a
+  deadline, a waiter whose client leaves (its task is cancelled) is dropped, and a slot handed to
+  a waiter that was cancelled in the same instant is passed on. The slot is released once, through
+  `ResponseStream.observing`, which also fires when the response is discarded before its stream
+  starts.
+- **`GenerationBridge`**: the synchronous `TokenGenerator.generate` runs on a thread of its own,
+  tokens reach the stream through an `AsyncThrowingStream`, one token waits at most (a reader that
+  stops reading stops the generation), and `shouldContinue` reads a cancellation flag before every
+  token, prompt tokens included. The slot is not given up until that thread has left the generator.
+- `ServiceError.invalidConfiguration`, `.exposedPlaintext`, `.tlsIdentity`, `.bindFailed`.
+
+### Behaviour that changes
+Recorded as the old server's bytes in `Tests/SwiftMoETests/Fixtures/exchanges.json` (85 exchanges,
+from tag v0.1.0) and replayed against the new server by `WireCharacterizationTests`.
+
+Intended (decided in the design proposal, section 7):
+- A malformed target (`//v1/chat/completions`, dot segments, a bad `%` escape) is `400
+  Malformed request target.`, not `404`.
+- A chunked upload within the body bound is accepted; the old `501` was a limit of the
+  hand-rolled reader.
+- A stream carries `Cache-Control: no-store` (was `no-cache`), is chunk-encoded rather than
+  ended by closing, and the responses carry `Date`.
+- The head and the body each get the read deadline (10 s), not 10 s between them.
+- HTTP/2 is off (decision O4); HTTP/1.1 only, one request per connection.
+- A generation that fails mid-stream still ends the stream with no finish chunk and no `[DONE]`
+  (decision O3).
+
+### Changed
+Found by replaying the old server's recorded exchanges and accepted as intended on 2026-10-30 (the
+table is in `WireCharacterizationTests`, which fails on any difference not in it, and in section 7
+of the proposal). All are the kit's behaviour at 0.5.0; none is worked around in this package.
+
+- **Known regression: a connection past `maxConnections` is closed with no response.** There is no
+  `503` and no `Retry-After` any more (spike S5). A client sees a reset and has nothing to honour.
+- A request with no `Host` is `400`, not `421` (the transport refuses it before any middleware).
+- An `HTTP/2.0` request line is `400`, not `505`.
+- A body that ends before its `Content-Length` closes the connection with no `400`; a client that
+  connects and sends nothing is closed at the idle deadline with no `408`.
+- A preflight from an allowed origin is answered `204` for any path (was `404` for a path other than
+  the route), and carries no `Content-Length: 0`.
+- The `413` status line reads `Payload Too Large` (was `Content Too Large`).
+- A body declared over the bound is `413` before the credential is checked (was `401`); either way it
+  is refused unread.
+- An HTTP/1.0 request is answered `HTTP/1.0` (the old server answered `HTTP/1.1`).
+- A header limit below 1 KiB is refused at start-up (`ServiceError.invalidConfiguration`).
+
+The ported server tests keep their assertions except where one of the above forced a change; each
+such test says `DIFFERENCE` in a comment above it. Tests that could not be ported: the
+`HTTPRequestHead` parser tests (the parser is gone; the kit tests its own) and the
+`SSEWriter` socket tests (replaced by `ChatChunkTests` and `GenerationBridgeTests`).
+
+### Verification
+- Spikes S2 to S5 of the proposal are tests (`SpikeTests`): the event-stream bytes equal the
+  recorded old bytes; other routes answer within 100 ms during a generation with eight requests
+  waiting; a reader that never reads stops the generation; a response discarded before its stream
+  starts releases the slot, and clients that vanish right after sending leak none.
+- Hand mutation of the new code (each mutant failed at least one test; the release in M1 and M9 is
+  reported after the gate has taken the slot back, which the S4 test needs):
+  - M1 gate release is a no-op: killed (hang, 7 tests failed)
+  - M2 `shouldContinue` ignores the cancellation flag: killed (4)
+  - M3 `emit` ignores cancellation: killed (1)
+  - M4 queue deadline never expires: killed (the queue tests hang until the harness times out)
+  - M5 queue deadline already expired: killed (5)
+  - M6 budget boundary `<=` becomes `<`: killed (5)
+  - M7 bearer layer ahead of the CORS layer (a preflight would need a key): killed (8)
+  - M8 `Host` check after the CORS layer: killed (1)
+  - M9 slot not released through `observing`: killed (hang, 4)
+  - M10 producer returns before the generator thread has left: killed (2)
+  - M11 finish chunk omitted: killed (32)
+  - M12 gate serves the newest waiter first: killed (3)
+  - M13 a waiter cancelled as it is handed the slot keeps it: killed (1)
+  - M14 backpressure credit not returned after a write: killed (5)
+
+  No mutant survived. The first run of M4 did not compile (an unused `self`); it was re-made and run.
+
 ## [0.1.0] - 2026-10-09
 
 The first tagged version. A `0.x` minor, because the engine has not yet been validated against
@@ -290,5 +403,6 @@ read the answer, and let one client decide how much work it did and for how long
   server blocked it forever; the wait is now bounded and cancels the request
 - Conv1d state shift in linear attention
 
-[Unreleased]: https://github.com/jpurnell/swiftMoE/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jpurnell/swiftMoE/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jpurnell/swiftMoE/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jpurnell/swiftMoE/releases/tag/v0.1.0

@@ -14,11 +14,12 @@ Based on the [Flash-MoE](https://github.com/danveloper/flash-moe) inference engi
 
 ### Key Differentiators
 - **Model-agnostic**: Runtime `ModelConfig` with presets — no hardcoded architecture constants
-- **Fully tested**: 226 tests with tiny synthetic model fixtures (no 210GB download needed)
+- **Fully tested**: 254 tests with tiny synthetic model fixtures (no 210GB download needed)
 - **All GPU paths**: 7 GPU optimization paths with automatic CPU fallback
-- **Pure Swift**: No C dependencies in the main library
-- **OpenAI-compatible**: `/v1/chat/completions` HTTP server with SSE streaming, bearer-key authentication,
-  and a bound on what one request can cost (sequence budget, queue deadline, cancellation on disconnect)
+- **Pure Swift**: No C dependencies in the main library, and no networking code in it either
+- **OpenAI-compatible**: `/v1/chat/completions` HTTP service (`SwiftMoEHTTP`, on SwiftHTTPService) with SSE
+  streaming, bearer-key authentication, TLS in the process, and a bound on what one request can cost
+  (sequence budget, queue deadline, cancellation on disconnect, a two-hour bound on a response)
 
 ---
 
@@ -45,13 +46,14 @@ SwiftMoE/
 │   ├── Attention/     FullAttention, LinearAttention, RMSNorm, RoPE, Softmax, BFloat16
 │   ├── Inference/     LayerPipeline, TokenGenerator, DeferredExpertState, KVCache,
 │   │                  LinearAttentionState, TopK, Embedding, LayerWeightCache, BPETokenizer
-│   └── Server/        HTTPServer (+ Request, Tokenizer), HTTPServerLimits,
-│                      APIKey (+ BearerCredential, HTTPServerError),
-│                      HTTPConnection, HTTPRequestHead, HTTPRefusal, ClientConnection,
-│                      InferenceQueue, SSEWriter, SessionStore
+│   └── Server/        SessionStore
+├── Sources/SwiftMoEHTTP/     The OpenAI-compatible service on SwiftHTTPService:
+│                             ChatService, InferenceGate, GenerationBridge, InferenceLimits,
+│                             APIKey (+ BearerCredential, Authentication, ServiceError),
+│                             ChatRequest, ChatChunk, OpenAIError
 ├── Sources/SwiftMoEServer/   HTTP server executable
 ├── Sources/SwiftMoEChat/     Interactive TUI executable
-├── Tests/SwiftMoETests/      226 tests, 35 suites
+├── Tests/SwiftMoETests/      254 tests; Fixtures/exchanges.json is the old server's recorded wire
 └── metal_infer/              Original Obj-C reference implementation
 ```
 
@@ -82,6 +84,12 @@ SwiftMoE/
       a queue for the model with a deadline (503 + `Retry-After`) in place of a lock; a client
       that disconnects gives up its queue place or stops its generation at the next token; a
       non-loopback bind refused unless plain text is acknowledged (`--allow-plaintext`)
+- [x] HTTP server on SwiftHTTPService (2026-10-30, v0.2.0): the raw-socket listener is deleted; the
+      service lives in `SwiftMoEHTTP`, which is the only target that imports the kit, so `SwiftMoE`
+      imports no networking. TLS is terminated in the process (`--tls-cert`, `--tls-key`, `SIGHUP`
+      reload), a response is bounded at two hours, shutdown is graceful, and the inference slot is an
+      actor (`InferenceGate`) released through the stream's `observing`. Design:
+      `project/plans/proposals/DesignProposal_HTTPServerOnSwiftHTTPService.md`
 - [x] Inference layer refuses to drop context: `KVCache.append` throws
       `FlashMoEError.sequenceCapacityExceeded` at capacity; `TokenGenerator.generate` checks the
       whole sequence up front, resets state per call, and can be cancelled during prefill
@@ -99,13 +107,14 @@ SwiftMoE/
 - [x] ~~HTTP server: authentication (bearer token), a restricted CORS origin instead of `*`,
       a read deadline, and a cap on `max_tokens` — none exist; loopback is the only control~~
       Shipped 2026-10-05 on `fix/server-credential-and-cors`; see Current Status.
-- [ ] HTTP server: TLS. The bearer key crosses the network in clear text, so a non-loopback
-      bind needs a TLS-terminating proxy in front of it.
-      **Still not shipped, and now a decision rather than a gap** (2026-10-09): the raw-socket server will not grow TLS of
-      its own. What shipped instead is that the exposure cannot happen by accident — a
-      non-loopback bind is refused without `--allow-plaintext` — and a reverse-proxy recipe in
-      the README. The key still crosses the proxy-to-server hop in clear text when that hop is
-      not loopback. Left open, unticked, because nothing here encrypts anything.
+- [x] ~~HTTP server: TLS. The bearer key crosses the network in clear text, so a non-loopback
+      bind needs a TLS-terminating proxy in front of it.~~
+      *(2026-10-09 this was restated as a decision, not a gap: "the raw-socket server will not grow
+      TLS of its own"; the exposure could not happen by accident, a non-loopback bind was refused
+      without `--allow-plaintext`, and the README carried a reverse-proxy recipe. Left open, because
+      nothing here encrypted anything.)* **Shipped 2026-10-30 in 0.2.0**, by moving to the kit
+      rather than growing TLS in the raw-socket code: the process terminates TLS (decision O2),
+      `--allow-plaintext` and the recipe are gone.
 - [x] ~~HTTP server: a prompt-length budget. The body is capped at 64 KiB, but the placeholder
       tokenizer makes that up to 65,536 prompt tokens against KV caches of 8,192 positions;
       the cap belongs with the real tokenizer (`--model` mode), which does not exist yet~~
@@ -118,17 +127,25 @@ SwiftMoE/
 - [x] ~~HTTP server: a validated request queues behind the running inference with no deadline
       of its own, holding one of the 16 connection slots for as long as that takes~~
       Shipped 2026-10-09 on `fix/bounded-work`: `InferenceQueue`, `Limits.queueDeadline`.
-- [ ] HTTP server: no bound on how long one response may take to *deliver*. The write timeout
+- [x] ~~HTTP server: no bound on how long one response may take to *deliver*. The write timeout
       (30 s) is per `write(2)`, so a client that reads slowly but steadily holds the model for
       as long as it likes — hours, at the kernel's low-water mark. Needs a whole-stream budget
       (a `Limits.responseDeadline`), and a decision about what it does to a legitimately long
-      generation: 8,192 tokens at 4.4 tok/s is already 31 minutes
+      generation: 8,192 tokens at 4.4 tok/s is already 31 minutes~~
+      Shipped 2026-10-30 in 0.2.0 as `InferenceLimits.maxStreamDuration`, two hours (decision O5):
+      the longest completion the server will deliver, which is about four times the 31 minutes.
+      A reader that stops reading ends its stream after the 30 s write deadline.
+- [ ] HTTP server, **known regression** (found 2026-10-30, accepted as intended, caused by the kit):
+      a connection past `maxConnections` is closed with no response, so the old `503` with
+      `Retry-After` is gone. Needs a kit change to restore; eight other accepted differences are in
+      the CHANGELOG (0.2.0, "Changed") and proposal section 7
 - [ ] HTTP server: the 16 connection slots can be held by clients that have not authenticated —
       each for at most the 10 s read deadline, but reconnecting costs nothing. There is no
       per-address limit; a fronting proxy is the place for one
 - [ ] HTTP server: a generation that fails after the stream has started ends the stream with
-      no error event — the client sees a stream without `[DONE]`. `SSEWriter` has no
-      `sendError`
+      no error event — the client sees a stream without `[DONE]`. **Decided (O3, 2026-10-30): keep
+      the truncation**, the only signal every client treats as a failure. Left open as a deliberate
+      behaviour; revisit if a client needs the reason
 - [ ] `swift-moe-server --model`: still unimplemented, so the real-weights path has never
       served a request and the server's tokenizer is the one-token-per-byte placeholder
 - [ ] A `LICENSE` file. The README defers to the upstream Flash-MoE repository; the package
@@ -141,23 +158,28 @@ SwiftMoE/
 - Zero compiler warnings
 - Quality gate clean at 0 errors / 0 warnings (`--check all`: 49 checkers, 4 of them not
   applicable to this package and skipped), no overrides
-- 226 tests, all passing
+- 254 tests, all passing
 - No force unwraps, force casts, or `try!`
 - No hardcoded domain constants (ADR-005)
 - Integration tests use `ModelConfig.tiny` (no model download required)
 
 ---
 
-**Last Updated:** 2026-10-09 — tagged v0.1.0, the first tag. Same day: reconciled for the first release (intended 0.1.0) after the
-bounded-work fix. Under Remaining: the prompt-length budget and the queued-request items shipped
-and are struck through, the first with a note that it shipped despite the bar it was recorded
-with; the TLS item is restated as a decision (no TLS in the raw-socket server; plain text must be
-acknowledged) and left open; five things found while doing it are added (response delivery
-time, unauthenticated connection slots, no mid-stream error event, `--model`, a licence file).
-Current Status gains the two shipped items. Test count 166 → 226 and suites 29 → 35 in the
-Overview, Module Structure and Quality Standards; the Server row lists `InferenceQueue` and
-`HTTPServerLimits`; the checker count is corrected from 45 to what `--check all` runs today;
-Technology Stack said Swift 6.0 where the manifest says tools 6.2.
+**Last Updated:** 2026-10-30 — 0.2.0: the HTTP server moved onto SwiftHTTPService. Reconciled against
+the shipped code: the module table (a new `SwiftMoEHTTP` target; `Server/` keeps `SessionStore`),
+Current Status (the move), and Remaining. Struck through, with their reasoning kept: the TLS item
+(shipped by moving to the kit, which the 2026-10-09 note had said the raw-socket server would not
+do) and the whole-response-deadline item (a two-hour `maxStreamDuration`). The mid-stream error
+event stays open as the decided behaviour (O3). A new item records the connection-cap `503` that is
+gone and the other differences found by replaying the old server's recorded exchanges. Tests
+226 → 254 in 40 suites. The 2026-10-09 note that the raw-socket server "will not grow TLS of its own" was true of that server and was overtaken by replacing it.
+
+Earlier: 2026-10-09 — tagged v0.1.0, the first tag. Reconciled for the first release after the
+bounded-work fix: the prompt-length budget and the queued-request items shipped and are struck
+through, the first with a note that it shipped despite the bar it was recorded with; the TLS item
+was restated as a decision and left open; five things found while doing it were added (response
+delivery time, unauthenticated connection slots, no mid-stream error event, `--model`, a licence
+file).
 
 Earlier: 2026-10-05 — reconciled after the server credential and CORS fix: the "HTTP server:
 authentication…" item under Remaining shipped and is struck through there and recorded under
