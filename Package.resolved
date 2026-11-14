@@ -1,5 +1,5 @@
 {
-  "originHash" : "d73faa3228cab70a4929715e445ab7add60eec1de074a00902e2455ce1657f91",
+  "originHash" : "0b79df4c42fa202d94b676ef1221d52a20d0c4469cb9db32d6bf9a31e90ebe10",
   "pins" : [
     {
       "identity" : "swift-algorithms",
@@ -177,8 +177,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jpurnell/SwiftHTTPService.git",
       "state" : {
-        "revision" : "1fabbf69324edd2c4ccd13e75807383342fbb066",
-        "version" : "0.6.0"
+        "revision" : "5ad5e82be2303e616d2ac594bffe7fdcba8fef63",
+        "version" : "1.0.0-beta.3"
       }
     },
     {
@@ -186,8 +186,8 @@
       "kind" : "remoteSourceControl",
       "location" : "git@github.com:jpurnell/SwiftTLSKit.git",
       "state" : {
-        "revision" : "0a836ef7a826aa8eaac225098eb4fcd08ed50738",
-        "version" : "0.2.1"
+        "revision" : "c2486732c556c53ccf4e70d14e83dd4b7d58fe62",
+        "version" : "1.0.0-beta.1"
       }
     }
   ],

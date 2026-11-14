@@ -124,8 +124,16 @@ struct SpikeTests {
 
     // MARK: - S4: the slot is released on every exit
 
-    @Test("S4: a response discarded before its stream starts releases the slot")
-    func discardedResponseReleasesTheSlot() async throws {
+    /// A connection that is gone as the response begins: the first write throws.
+    ///
+    /// This is what a test can do with the stream's public surface. The other way a slot is released, the
+    /// transport discarding a stream whose producer never runs, is `ResponseStream.discard()`, which SwiftHTTPService
+    /// 1.0.0-beta.3 made `package` (the transport calls it; nothing else should). That path is covered through the
+    /// transport by `vanishingClientsDoNotLeakTheSlot` below.
+    private struct ConnectionGone: Error {}
+
+    @Test("S4: a response whose connection dies as it begins releases the slot")
+    func failedFirstWriteReleasesTheSlot() async throws {
         let events = ServerEvents()
         let service = ChatService(host: "127.0.0.1", port: 0, authentication: .unauthenticatedLoopback,
                                   allowedOrigins: [], limits: InferenceLimits(), tls: nil,
@@ -137,16 +145,17 @@ struct SpikeTests {
                                   body: Data(#"{"messages":[{"role":"user","content":"hi"}]}"#.utf8))
 
         let first = try await service.handle(request)
-        // The connection died between the handler returning and the stream starting: the transport
-        // discards the stream instead of running it.
-        try #require(first.stream).discard()
+        // The connection died as the response began: the transport's first write throws.
+        let firstStream = try #require(first.stream)
+        _ = try? await firstStream.produce(ResponseWriter { _ in throw ConnectionGone() })
         #expect(events.awaitNext(.slotReleased))
 
         // The next request is admitted at once, not queued behind a slot nobody holds.
         let second = try await service.handle(request)
         #expect(second.status == .ok)
         #expect(events.count(of: .requestQueued) == 0)
-        try #require(second.stream).discard()
+        let secondStream = try #require(second.stream)
+        _ = try? await secondStream.produce(ResponseWriter { _ in throw ConnectionGone() })
     }
 
     @Test("S4: clients that vanish right after sending never starve the next request", arguments: 0..<3)
